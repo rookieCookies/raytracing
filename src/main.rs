@@ -3,8 +3,9 @@ mod camera;
 mod hittable;
 pub mod rng;
 mod materials;
+pub mod utils;
 
-use std::{time::Instant, f64::consts::PI};
+use std::time::Instant;
 
 use crate::{math::{vec3::{Vec3, Colour, Point}, interval::Interval}, hittable::Hittable, camera::Camera, materials::Material, rng::{next_f64_range, next_f64}};
 
@@ -13,7 +14,7 @@ fn main() {
     let time = Instant::now();
 
     // Camera
-    let camera = Camera::new(16.0 / 10.0, 3024, 150, 5000, 20.0, Point::new(13.0, 2.0, 3.0),
+    let camera = Camera::new(16.0 / 10.0, 1080, 10, 100, 20.0, Point::new(13.0, 2.0, 3.0),
                              Point::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 0.6, 10.0);
 
     // Rng
@@ -34,7 +35,6 @@ fn main() {
 
             if (centre - Point::new(4.0, 0.2, 0.0)).length() <= 0.9 { continue }
 
-            println!("{a} {b}");
             let mat;
             if choose_mat < 0.8 {
                 // diffuse

@@ -1,4 +1,4 @@
-use crate::{hittable::{HitRecord, Hittable}, rng::next_f64};
+use crate::hittable::{HitRecord, Hittable};
 
 use super::{vec3::{Point, Vec3, Colour}, interval::Interval};
 

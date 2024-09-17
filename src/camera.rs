@@ -1,8 +1,8 @@
 use std::{fmt::Write, sync::atomic::AtomicUsize};
 
-use rayon::iter::{ParallelBridge, ParallelIterator, IntoParallelIterator};
+use rayon::iter::{ParallelBridge, ParallelIterator};
 
-use crate::{math::{vec3::{Point, Vec3, Colour}, ray::Ray}, hittable::Hittable, rng::next_f64};
+use crate::{hittable::Hittable, math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::next_f64, utils::SendPtr};
 
 pub struct Camera {
     pub image: (usize, usize),
@@ -73,23 +73,6 @@ impl Camera {
 
 
     pub fn render(&self, world: &Hittable) -> String {
-        let counter = AtomicUsize::new(0);
-        let iter = (0..self.image.1)
-            .into_par_iter()
-            .flat_map_iter(|y| {
-                println!("{}/{}", counter.fetch_add(1, std::sync::atomic::Ordering::Release), self.image.1);
-                (0..self.image.0).map(move |x| (x, y))
-            });
-
-        let iter = iter.map(|(x, y)| {
-            let mut colour = Colour::new(0.0, 0.0, 0.0);
-            for _ in 0..self.samples_per_pixel {
-                let ray = self.get_ray(x, y);
-                colour += ray.colour(&world, self.max_depth);
-            }
-
-            colour
-        });
 
         let mut buffer = String::new();
         writeln!(buffer, "P3\n {} {}\n255", self.image.0, self.image.1).unwrap();
@@ -98,23 +81,32 @@ impl Camera {
         buffer.reserve(cap);
 
         let cap = buffer.capacity();
+        let mut colours : Vec<Colour> = Vec::with_capacity(self.image.0 * self.image.1);
 
-        let colours = iter.map(|mut colour| {
-            let scale = 1.0 / self.samples_per_pixel as f64;
-            colour.x *= scale;
-            colour.y *= scale;
-            colour.z *= scale;
+        {
+            let ptr = SendPtr(colours.as_mut_ptr());
+            let counter = AtomicUsize::new(0);
 
-            /*
-            // Linear -> Gamma
-            colour.x *= colour.x.sqrt();
-            colour.y *= colour.y.sqrt();
-            colour.z *= colour.z.sqrt();
-            */
 
-            colour
-        }).collect::<Vec<_>>();
+            // i have never cared less about UB as i have here
+            (0..self.image.1).par_bridge()
+                .for_each(move |y| {
+                    let ptr = ptr;
+                    let mut ptr = unsafe { ptr.0.offset((y*self.image.0) as isize) };
+                    for x in 0..self.image.0 {
+                        let colour = self.colour_of(world, x, y);
+                        unsafe { ptr.write(colour) };
+                        ptr = unsafe { ptr.add(1) };
+                    }
 
+                    let count = counter.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    println!("{}/{}", count, self.image.1);
+                });
+            
+            unsafe { colours.set_len(self.image.0 * self.image.1) };
+
+        }
+        
         for colour in colours {
             writeln!(buffer, "{} {} {}",
                      (colour.x * 255.999) as u8,
@@ -127,6 +119,31 @@ impl Camera {
 
         buffer
     }
+
+    
+    fn colour_of(&self, world: &Hittable, x: usize, y: usize) -> Colour {
+        // calculate the colour
+        let mut colour = Colour::new(0.0, 0.0, 0.0);
+        for _ in 0..self.samples_per_pixel {
+            let ray = self.get_ray(x, y);
+            colour += ray.colour(&world, self.max_depth);
+        }
+
+        // finalise
+        let scale = 1.0 / self.samples_per_pixel as f64;
+        colour.x *= scale;
+        colour.y *= scale;
+        colour.z *= scale;
+
+
+        // Linear -> Gamma
+        colour.x = linear_to_gamma(colour.x);
+        colour.y = linear_to_gamma(colour.y);
+        colour.z = linear_to_gamma(colour.z);
+
+        colour
+    }
+
 
 
     fn get_ray(&self, x: usize, y: usize) -> Ray {
@@ -155,3 +172,11 @@ impl Camera {
     }
 }
 
+
+
+/// Transforms a colour from linear space to gamma space
+#[inline(always)]
+fn linear_to_gamma(linear_comp: f64) -> f64 {
+    if linear_comp > 0.0 { linear_comp.sqrt() }
+    else { linear_comp }
+}
