@@ -2,7 +2,7 @@ use std::{ops::{Sub, Neg, AddAssign, MulAssign, DivAssign, Add, Mul, Div}, fmt::
 
 use crate::rng::{next_f64, next_f64_range};
 
-use super::interval::Interval;
+use super::{interval::Interval, matrix::Matrix};
 
 pub type Point = Vec3;
 pub type Colour = Vec3;
@@ -16,6 +16,8 @@ pub struct Vec3 {
 
 
 impl Vec3 {
+    pub const ZERO : Vec3 = Vec3::new(0.0, 0.0, 0.0);
+
     #[inline(always)]
     pub const fn new(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3 { x, y, z }
@@ -105,6 +107,16 @@ impl Vec3 {
     #[inline(always)]
     pub fn unit(self) -> Vec3 {
         self / self.length()
+    }
+
+    #[inline(always)]
+    pub fn to_matrix(self) -> Matrix<4, 1, f64> {
+        Matrix::new([
+            [self.x],
+            [self.y],
+            [self.z],
+            [1.0],
+        ])
     }
 }
 

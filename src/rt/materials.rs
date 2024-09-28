@@ -1,4 +1,4 @@
-use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, hittable::HitRecord, rng::next_f64};
+use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rt::hittable::HitRecord, rng::next_f64};
 
 #[derive(Default, Clone, Copy)]
 pub enum Material {
@@ -25,17 +25,19 @@ impl Material {
         match self {
             Material::Lambertian { albedo } => {
                 let mut scatter_dir = rec.normal + Vec3::random_unit();
-                if scatter_dir.near_zero() { scatter_dir = rec.normal };
-                let scatter_dir = scatter_dir;
 
-                let scattered = Ray::new(rec.point, scatter_dir);
+                if scatter_dir.near_zero() { scatter_dir = rec.normal };
+
+                let scatter_dir = scatter_dir;
+                let scattered = Ray::new(rec.point, scatter_dir, ray_in.time);
                 Some((scattered, albedo))
             },
 
             Material::Metal { albedo, fuzz_radius } => {
                 let fuzz_radius = fuzz_radius.min(1.0);
                 let reflected = ray_in.direction.unit().reflect(rec.normal);
-                let scattered = Ray::new(rec.point, reflected + fuzz_radius * Vec3::random_unit());
+                let scattered = Ray::new(rec.point, reflected + fuzz_radius * Vec3::random_unit(), ray_in.time);
+
                 if scattered.direction.dot(rec.normal) > 0.0 {
                     Some((scattered, albedo))
                 } else { None }
@@ -57,7 +59,7 @@ impl Material {
                     unit_dir.refract(rec.normal, refraction_ratio)
                 };
 
-                Some((Ray::new(rec.point, direction), attenuation))
+                Some((Ray::new(rec.point, direction, ray_in.time), attenuation))
             },
 
             Material::Unknown => unimplemented!(),

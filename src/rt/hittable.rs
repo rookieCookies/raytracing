@@ -1,4 +1,4 @@
-use crate::{math::{ray::Ray, vec3::{Point, Vec3}, interval::Interval}, materials::Material};
+use crate::{math::{ray::Ray, vec3::{Point, Vec3}, interval::Interval}, rt::materials::Material};
 
 #[derive(Clone, Default)]
 pub struct HitRecord {
@@ -13,6 +13,7 @@ pub struct HitRecord {
 pub enum Hittable {
     List(Vec<Hittable>),
     Sphere { centre: Point, radius: f64, mat: Material },
+    MovingSphere { centre: Ray, radius: f64, mat: Material },
 }
 
 
@@ -72,6 +73,36 @@ impl Hittable {
                 rec.material = *mat;
 
                 true
+            },
+
+
+            Hittable::MovingSphere { centre, radius, mat } => {
+                let current_centre = centre.at(ray.time);
+                let oc = ray.origin - current_centre;
+                let a = ray.direction.length_squared();
+                let half_b = oc.dot(ray.direction);
+                let c = oc.length_squared() - radius*radius;
+
+                let discriminant = half_b*half_b - a*c;
+                if discriminant < 0.0 { return false }
+                
+                let discriminant_sqrt = discriminant.sqrt();
+
+                // Find the nearest root that lies in the acceptable range
+                let mut root = (-half_b - discriminant_sqrt) / a;
+                if !t.surrounds(root) {
+                    root = (-half_b + discriminant_sqrt) / a;
+                    if !t.surrounds(root) { return false }
+                }
+
+                rec.t = root;
+                rec.point = ray.at(rec.t);
+                let outward_normal = (rec.point - current_centre) / *radius;
+                rec.set_face_normal(ray, outward_normal);
+                rec.material = *mat;
+
+                true
+
             },
         }
     }

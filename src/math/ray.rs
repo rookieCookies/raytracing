@@ -1,4 +1,4 @@
-use crate::hittable::{HitRecord, Hittable};
+use crate::rt::hittable::{HitRecord, Hittable};
 
 use super::{vec3::{Point, Vec3, Colour}, interval::Interval};
 
@@ -6,17 +6,18 @@ use super::{vec3::{Point, Vec3, Colour}, interval::Interval};
 pub struct Ray {
     pub origin: Point,
     pub direction: Vec3,
+    pub time: f64,
 }
 
 
 impl Ray {
     #[inline(always)]
-    pub fn new(origin: Point, direction: Vec3) -> Self {
-        Self { origin, direction, }
+    pub fn new(origin: Point, direction: Vec3, time: f64) -> Self {
+        Self { origin, direction, time }
     }
 
     #[inline(always)]
-    pub fn at(self, t: f64) -> Point { self.origin + t * self.direction }
+    pub fn at(self, t: f64) -> Point { self.origin + t*self.direction }
 
 
     #[inline(always)]
