@@ -5,16 +5,16 @@ use crate::{math::{matrix::Matrix, vec3::{Colour, Vec3}}, rt::{camera::Raytracin
 
 #[derive(Clone)]
 pub struct Camera {
-    position: Vec3,
+    pub position: Vec3,
     direction: Vec3,
 
-    pub pitch: f64,
-    pub yaw: f64,
+    pub pitch: f32,
+    pub yaw: f32,
 
-    aspect_ratio: f64,
-    vfov: f64,
+    aspect_ratio: f32,
+    vfov: f32,
     vup: Vec3,
-    focus_dist: f64,
+    focus_dist: f32,
     pub rt_cam: RaytracingCamera,
     
     colours: Vec<Colour>,
@@ -22,13 +22,13 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(position: Vec3, direction: Vec3,
-               aspect_ratio: f64, width: usize, samples_per_pixel: usize,
-               max_depth: usize, vfov: f64, 
-               vup: Vec3, defocus_angle: f64, focus_dist: f64) -> Self {
+               aspect_ratio: f32, width: usize, samples_per_pixel: usize,
+               max_depth: usize, vfov: f32, 
+               vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
         let rc = RaytracingCamera::new(aspect_ratio, width, samples_per_pixel, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist);
 
         let height = {
-            let val = (width as f64 / aspect_ratio) as usize;
+            let val = (width as f32 / aspect_ratio) as usize;
             if val <= 0 { 1 } else { val }
         };
 
@@ -95,7 +95,7 @@ impl Camera {
     }
 
 
-    pub fn change_pitch_yaw_by(&mut self, delta_pitch: f64, delta_yaw: f64) {
+    pub fn change_pitch_yaw_by(&mut self, delta_pitch: f32, delta_yaw: f32) {
         self.pitch += delta_pitch;
         self.yaw += delta_yaw;
         self.direction = Vec3::new(

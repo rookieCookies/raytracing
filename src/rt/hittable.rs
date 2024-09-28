@@ -1,19 +1,32 @@
-use crate::{math::{ray::Ray, vec3::{Point, Vec3}, interval::Interval}, rt::materials::Material};
+use std::cmp::Ordering;
+
+use sti::{arena::Arena, traits::FromIn};
+
+use crate::{math::{aabb::AABB, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, rng::next, rt::materials::Material};
 
 #[derive(Clone, Default)]
 pub struct HitRecord {
     pub point: Point,
     pub normal: Vec3,
-    pub t: f64,
+    pub t: f32,
     pub front_face: bool,
     pub material: Material,
 }
 
 
-pub enum Hittable {
-    List(Vec<Hittable>),
-    Sphere { centre: Point, radius: f64, mat: Material },
-    MovingSphere { centre: Ray, radius: f64, mat: Material },
+#[derive(Clone)]
+pub struct Hittable<'a> {
+    aabb: AABB,
+    kind: HittableKind<'a>,
+}
+
+
+#[derive(Clone)]
+pub enum HittableKind<'a> {
+    List(&'a [Hittable<'a>]),
+    Sphere { centre: Point, radius: f32, mat: Material },
+    MovingSphere { centre: Ray, radius: f32, mat: Material },
+    BVH { left: &'a Hittable<'a>, right: &'a Hittable<'a> }
 }
 
 
@@ -29,10 +42,90 @@ impl HitRecord {
 }
 
 
-impl Hittable {
+
+impl Hittable<'_> {
+    pub fn sphere<'a>(centre: Point, radius: f32, mat: Material) -> Hittable<'a> {
+        let rvec = Vec3::new(radius, radius, radius);
+        let aabb = AABB::from_points(centre - rvec, centre + rvec);
+        Hittable {
+            aabb,
+            kind: HittableKind::Sphere { centre, radius, mat },
+        }
+    }
+
+
+    pub fn moving_sphere<'a>(centre1: Point, centre2: Point, radius: f32, mat: Material) -> Hittable<'a> {
+        let centre = Ray::new(centre1, centre2 - centre1, 0.0);
+
+        let rvec = Vec3::new(radius, radius, radius);
+        let box1 = AABB::from_points(centre.at(0.0) - rvec, centre.at(0.0) + rvec);
+        let box2 = AABB::from_points(centre.at(1.0) - rvec, centre.at(1.0) + rvec);
+        let aabb = AABB::from_aabbs(&box1, &box2);
+
+        Hittable {
+            aabb,
+            kind: HittableKind::MovingSphere { centre, radius, mat },
+        }
+    }
+
+
+    pub fn list<'a>(list: &'a [Hittable<'a>]) -> Hittable<'a> {
+        let mut aabb = AABB::new(Interval::EMPTY, Interval::EMPTY, Interval::EMPTY);
+
+        for l in list {
+            aabb = AABB::from_aabbs(&aabb, l.bounding_box());
+        }
+
+        Hittable {
+            aabb,
+            kind: HittableKind::List(list),
+        }
+    }
+
+    pub fn bvh<'a>(arena: &'a Arena, list: &'a [Hittable<'a>]) -> Hittable<'a> {
+        fn box_comp(a: &Hittable, b: &Hittable, axis: usize) -> bool {
+            let a_axis_interval = a.bounding_box().axis_interval(axis);
+            let b_axis_interval = b.bounding_box().axis_interval(axis);
+
+            a_axis_interval.min < b_axis_interval.min
+        }
+
+        let mut aabb = AABB::new(Interval::EMPTY, Interval::EMPTY, Interval::EMPTY);
+        for l in list {
+            aabb = AABB::from_aabbs(&aabb, l.bounding_box());
+        }
+
+        let axis = aabb.longest_axis();
+
+        let left;
+        let right;
+        if list.len() == 1 {
+            left = list[0].clone();
+            right = left.clone();
+        } else if list.len() == 2 {
+            left = list[0].clone();
+            right = list[1].clone();
+        } else {
+            let mut list = sti::vec::Vec::from_slice_in(arena, list);
+            list.sort_by(|a, b| if box_comp(a, b, axis) { Ordering::Less } else { Ordering::Greater });
+
+            let middle = list.len() / 2;
+            let list = list.leak().split_at(middle);
+
+            left = Hittable::bvh(arena, list.0);
+            right = Hittable::bvh(arena, list.1);
+        }
+
+        Hittable {
+            aabb,
+            kind: HittableKind::BVH { left: arena.alloc_new(left), right: arena.alloc_new(right) }
+        }
+    }
+
+
     pub fn hit(&self, ray: Ray, t: Interval, rec: &mut HitRecord) -> bool {
-        match self {
-            Hittable::List(vec) => {
+        match &self.kind {
+            HittableKind::List(vec) => {
                 let mut temp_rec = HitRecord::default();
                 let mut hit_anything = false;
                 let mut closest_so_far = t.max;
@@ -48,7 +141,7 @@ impl Hittable {
                 hit_anything
             },
  
-            Hittable::Sphere { centre, radius, mat } => {
+            HittableKind::Sphere { centre, radius, mat } => {
                 let oc = ray.origin - *centre;
                 let a = ray.direction.length_squared();
                 let half_b = oc.dot(ray.direction);
@@ -76,7 +169,7 @@ impl Hittable {
             },
 
 
-            Hittable::MovingSphere { centre, radius, mat } => {
+            HittableKind::MovingSphere { centre, radius, mat } => {
                 let current_centre = centre.at(ray.time);
                 let oc = ray.origin - current_centre;
                 let a = ray.direction.length_squared();
@@ -104,7 +197,24 @@ impl Hittable {
                 true
 
             },
+
+
+            HittableKind::BVH { left, right } => {
+                if !self.bounding_box().hit(ray, t) {
+                    return false;
+                }
+
+                let hit_left = left.hit(ray, t, rec);
+                let hit_right = right.hit(ray, Interval::new(t.min, if hit_left { rec.t } else { t.max }), rec);
+
+                hit_left || hit_right
+            }
         }
+    }
+
+
+    pub fn bounding_box(&self) -> &AABB {
+        &self.aabb
     }
 }
 

@@ -6,18 +6,18 @@ use super::{vec3::{Point, Vec3, Colour}, interval::Interval};
 pub struct Ray {
     pub origin: Point,
     pub direction: Vec3,
-    pub time: f64,
+    pub time: f32,
 }
 
 
 impl Ray {
     #[inline(always)]
-    pub fn new(origin: Point, direction: Vec3, time: f64) -> Self {
+    pub fn new(origin: Point, direction: Vec3, time: f32) -> Self {
         Self { origin, direction, time }
     }
 
     #[inline(always)]
-    pub fn at(self, t: f64) -> Point { self.origin + t*self.direction }
+    pub fn at(self, t: f32) -> Point { self.origin + t*self.direction }
 
 
     #[inline(always)]
@@ -25,7 +25,7 @@ impl Ray {
         if depth == 0 { return Colour::new(0.0, 0.0, 0.0) }
 
         let mut rec = HitRecord::default();
-        if world.hit(self, Interval::new(0.001, f64::INFINITY), &mut rec) {
+        if world.hit(self, Interval::new(0.001, f32::INFINITY), &mut rec) {
             if let Some((scattered, attenuation)) = rec.material.scatter(self, &rec) {
                 return attenuation * scattered.colour(world, depth - 1);
             }

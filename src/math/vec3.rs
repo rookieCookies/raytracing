@@ -1,6 +1,6 @@
-use std::{ops::{Sub, Neg, AddAssign, MulAssign, DivAssign, Add, Mul, Div}, fmt::Display};
+use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, Mul, MulAssign, Neg, Sub}};
 
-use crate::rng::{next_f64, next_f64_range};
+use crate::rng::{next_f32, next_f32_range};
 
 use super::{interval::Interval, matrix::Matrix};
 
@@ -9,9 +9,9 @@ pub type Colour = Vec3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Vec3 {
-    pub x : f64,
-    pub y : f64,
-    pub z : f64,
+    pub x : f32,
+    pub y : f32,
+    pub z : f32,
 }
 
 
@@ -19,25 +19,25 @@ impl Vec3 {
     pub const ZERO : Vec3 = Vec3::new(0.0, 0.0, 0.0);
 
     #[inline(always)]
-    pub const fn new(x: f64, y: f64, z: f64) -> Vec3 {
+    pub const fn new(x: f32, y: f32, z: f32) -> Vec3 {
         Vec3 { x, y, z }
     }
 
     #[inline(always)]
     pub fn random() -> Vec3 {
-        Vec3 { x: next_f64(), y: next_f64(), z: next_f64() }
+        Vec3 { x: next_f32(), y: next_f32(), z: next_f32() }
     }
 
     #[inline(always)]
     pub fn random_range(r: Interval) -> Vec3 {
-        Vec3 { x: next_f64_range(r), y: next_f64_range(r), z: next_f64_range(r) }
+        Vec3 { x: next_f32_range(r), y: next_f32_range(r), z: next_f32_range(r) }
     }
 
     #[inline(always)]
     pub fn random_in_unit_disk() -> Vec3 {
         let range = Interval::new(-1.0, 1.0);
         loop {
-            let p = Vec3::new(next_f64_range(range), next_f64_range(range), 0.0);
+            let p = Vec3::new(next_f32_range(range), next_f32_range(range), 0.0);
             if p.length_squared() < 1.0 { return p }
         }
     }
@@ -65,7 +65,7 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn near_zero(self) -> bool {
-        const TRESHOLD : f64 = 1e-8;
+        const TRESHOLD : f32 = 1e-8;
         self.x.abs() < TRESHOLD && self.y.abs() < TRESHOLD && self.z.abs() < TRESHOLD 
     }
 
@@ -75,7 +75,7 @@ impl Vec3 {
     }
 
     #[inline(always)]
-    pub fn refract(self, n: Vec3, etai_over_etat: f64) -> Vec3 {
+    pub fn refract(self, n: Vec3, etai_over_etat: f32) -> Vec3 {
         let cos_theta = (-self).dot(n).min(1.0);
         let r_out_perp = etai_over_etat * (self + cos_theta*n);
         let r_out_parallel = -(1.0 - r_out_perp.length_squared()).abs().sqrt() * n;
@@ -83,15 +83,15 @@ impl Vec3 {
     }
 
     #[inline(always)]
-    pub fn length_squared(self) -> f64 {
+    pub fn length_squared(self) -> f32 {
         self.x * self.x + self.y * self.y + self.z * self.z
     }
 
     #[inline(always)]
-    pub fn length(self) -> f64 { self.length_squared().sqrt() }
+    pub fn length(self) -> f32 { self.length_squared().sqrt() }
 
     #[inline(always)]
-    pub fn dot(self, rhs: Vec3) -> f64 {
+    pub fn dot(self, rhs: Vec3) -> f32 {
         self.x * rhs.x +
         self.y * rhs.y +
         self.z * rhs.z
@@ -110,7 +110,7 @@ impl Vec3 {
     }
 
     #[inline(always)]
-    pub fn to_matrix(self) -> Matrix<4, 1, f64> {
+    pub fn to_matrix(self) -> Matrix<4, 1, f32> {
         Matrix::new([
             [self.x],
             [self.y],
@@ -145,9 +145,9 @@ impl AddAssign for Vec3 {
 }
 
 
-impl MulAssign<f64> for Vec3 {
+impl MulAssign<f32> for Vec3 {
     #[inline(always)]
-    fn mul_assign(&mut self, rhs: f64) {
+    fn mul_assign(&mut self, rhs: f32) {
         self.x *= rhs;
         self.y *= rhs;
         self.z *= rhs;
@@ -155,9 +155,9 @@ impl MulAssign<f64> for Vec3 {
 }
 
 
-impl DivAssign<f64> for Vec3 {
+impl DivAssign<f32> for Vec3 {
     #[inline(always)]
-    fn div_assign(&mut self, rhs: f64) {
+    fn div_assign(&mut self, rhs: f32) {
         *self *= 1.0 / rhs
     }
 }
@@ -197,7 +197,7 @@ impl Mul<Vec3> for Vec3 {
 }
 
 
-impl Mul<Vec3> for f64 {
+impl Mul<Vec3> for f32 {
     type Output = Vec3;
 
     fn mul(self, rhs: Vec3) -> Self::Output {
@@ -206,10 +206,22 @@ impl Mul<Vec3> for f64 {
 }
 
 
-impl Div<f64> for Vec3 {
+impl Div<f32> for Vec3 {
     type Output = Self;
 
-    fn div(self, rhs: f64) -> Self::Output {
+    fn div(self, rhs: f32) -> Self::Output {
         (1.0 / rhs) * self
+    }
+}
+
+
+impl Index<usize> for Vec3 {
+    type Output = f32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        if index == 0 { return &self.x }
+        if index == 1 { return &self.y }
+        if index == 2 { return &self.z }
+        unreachable!()
     }
 }

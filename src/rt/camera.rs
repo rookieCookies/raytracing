@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicUsize;
 
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
-use crate::{math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::next_f64, utils::SendPtr};
+use crate::{math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::next_f32, utils::SendPtr};
 
 use super::hittable::Hittable;
 
@@ -15,18 +15,18 @@ pub struct RaytracingCamera {
     pub pixel_delta_v: Vec3,
     pub samples_per_pixel: usize,
     pub max_depth: usize,
-    pub defocus_angle: f64,
+    pub defocus_angle: f32,
     pub defocus_disk_u: Vec3,
     pub defocus_disk_v: Vec3,
 }
 
 impl RaytracingCamera {
-    pub fn new(aspect_ratio: f64, width: usize, samples_per_pixel: usize,
-               max_depth: usize, vfov: f64, look_from: Vec3, look_at: Vec3,
-               vup: Vec3, defocus_angle: f64, focus_dist: f64) -> Self {
+    pub fn new(aspect_ratio: f32, width: usize, samples_per_pixel: usize,
+               max_depth: usize, vfov: f32, look_from: Vec3, look_at: Vec3,
+               vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
 
         let height = {
-            let val = (width as f64 / aspect_ratio) as usize;
+            let val = (width as f32 / aspect_ratio) as usize;
             if val <= 0 { 1 } else { val }
         };
 
@@ -36,7 +36,7 @@ impl RaytracingCamera {
         let theta = vfov.to_radians();
         let h = (theta/2.0).tan();
         let viewport_height = 2.0 * h * focus_dist;
-        let viewport_width = viewport_height * (width as f64 / height as f64);
+        let viewport_width = viewport_height * (width as f32 / height as f32);
 
         let w = (look_from - look_at).unit();
         let u = vup.cross(w).unit();
@@ -45,8 +45,8 @@ impl RaytracingCamera {
         let viewport_u = viewport_width  * u;
         let viewport_v = viewport_height * -v;
 
-        let pixel_delta_u = viewport_u / width as f64;
-        let pixel_delta_v = viewport_v / height as f64;
+        let pixel_delta_u = viewport_u / width as f32;
+        let pixel_delta_v = viewport_v / height as f32;
 
 
         let viewport_upper_left = centre
@@ -107,7 +107,7 @@ impl RaytracingCamera {
         }
 
         // finalise
-        let scale = 1.0 / self.samples_per_pixel as f64;
+        let scale = 1.0 / self.samples_per_pixel as f32;
         colour.x *= scale;
         colour.y *= scale;
         colour.z *= scale;
@@ -124,12 +124,12 @@ impl RaytracingCamera {
 
 
     fn get_ray(&self, x: usize, y: usize) -> Ray {
-        let pixel_centre = self.pixel00_loc + (x as f64 * self.pixel_delta_u) + (y as f64 * self.pixel_delta_v);
+        let pixel_centre = self.pixel00_loc + (x as f32 * self.pixel_delta_u) + (y as f32 * self.pixel_delta_v);
         let pixel_sample = pixel_centre + self.pixel_sample_square();
 
         let ray_origin = if self.defocus_angle <= 0.0 { self.centre } else { self.defocus_disk_sample() };
         let ray_direction = pixel_sample - ray_origin;
-        let ray_time = next_f64();
+        let ray_time = next_f32();
 
         Ray::new(ray_origin, ray_direction, ray_time)
 
@@ -143,8 +143,8 @@ impl RaytracingCamera {
 
 
     fn pixel_sample_square(&self) -> Vec3 {
-        let px = -0.5 + next_f64();
-        let py = -0.5 + next_f64();
+        let px = -0.5 + next_f32();
+        let py = -0.5 + next_f32();
 
         px * self.pixel_delta_u + py * self.pixel_delta_v
     }
@@ -154,7 +154,7 @@ impl RaytracingCamera {
 
 /// Transforms a colour from linear space to gamma space
 #[inline(always)]
-fn linear_to_gamma(linear_comp: f64) -> f64 {
+fn linear_to_gamma(linear_comp: f32) -> f32 {
     if linear_comp > 0.0 { linear_comp.sqrt() }
     else { linear_comp }
 }

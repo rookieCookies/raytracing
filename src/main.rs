@@ -4,21 +4,21 @@ pub mod rng;
 pub mod utils;
 pub mod rt;
 
-use core::panic;
-use std::{os::unix::thread, sync::{mpsc, Arc, Mutex}, time::Instant};
+use std::{env, fs, time::Instant};
 
 use raylib::{drawing::{RaylibDraw, RaylibTextureModeExt}, math::{Rectangle, Vector2}};
+use sti::arena::Arena;
 
-use crate::{camera::Camera, rt::{camera::RaytracingCamera, hittable::Hittable, materials::Material}, math::{interval::Interval, matrix::Matrix, ray::Ray, vec3::{Colour, Point, Vec3}}, rng::{next_f64, next_f64_range}};
+use crate::{camera::Camera, rt::{hittable::Hittable, materials::Material}, math::{interval::Interval, ray::Ray, vec3::{Colour, Point, Vec3}}, rng::{next_f32, next_f32_range}};
 
 
-const RENDER_RESOLUTION : usize = 180;
-const RENDER_RESOLUTION_X : usize = (RENDER_RESOLUTION as f64 * ASPECT_RATIO) as usize;
-const DISPLAY_RESOLUTION : usize = 720;
-const DISPLAY_RESOLUTION_X : usize = (DISPLAY_RESOLUTION as f64 * ASPECT_RATIO) as usize;
-const ASPECT_RATIO : f64 = 16.0 / 9.0;
+const RENDER_RESOLUTION : usize = 1080/8;
+const RENDER_RESOLUTION_X : usize = (RENDER_RESOLUTION as f32 * ASPECT_RATIO) as usize;
+const DISPLAY_RESOLUTION : usize = 900;
+const DISPLAY_RESOLUTION_X : usize = (DISPLAY_RESOLUTION as f32 * ASPECT_RATIO) as usize;
+const ASPECT_RATIO : f32 = 16.0 / 9.0;
 const SENSITIVITY : f32 = 0.05;
-const CAMERA_SPEED : f64 = 3.0;
+const CAMERA_SPEED : f32 = 3.0;
 
 
 fn main() {
@@ -26,27 +26,32 @@ fn main() {
     let time = Instant::now();
 
     // Camera
-    let mut camera = Camera::new(Point::new(-10.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0),
-                             ASPECT_RATIO, RENDER_RESOLUTION_X, 10, 50, 20.0,
-                             Vec3::new(0.0, 1.0, 0.0), 0.6, 10.0);
+    let mut camera = Camera::new(Point::new(-12.0, 4.0, -5.0), Vec3::new(1.0, 0.0, 0.0),
+                             ASPECT_RATIO, RENDER_RESOLUTION_X, 100, 50, 20.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.6, 10.0);
+    camera.change_pitch_yaw_by(-15.0, 21.0);
 
     // Rng
     for _ in 0..RENDER_RESOLUTION {
-        rng::next_f64();
+        rng::next_f32();
     }
 
     // World
-    let mut world = Vec::new();
+    let arena = Arena::new();
+    let mut world = sti::vec::Vec::new_in(&arena);
 
     let material_ground = Material::Lambertian { albedo: Colour::new(0.5, 0.5, 0.5) };
-    world.push(Hittable::Sphere { centre: Point::new(0.0, -1000.0, 0.0), radius: 1000.0, mat: material_ground });
+    world.push(Hittable::sphere(Point::new(0.0, -1000.0, 0.0), 1000.0, material_ground));
 
+    
+    
+    
     /*
     for a in -11..11 {
         for b in -11..11 {
-            let choose_mat = next_f64();
-            let centre = Vec3::new(a as f64 + 0.9 * next_f64(), 0.2, b as f64 + 0.9 * next_f64());
-            let centre_2 = centre + Vec3::new(0.0, next_f64() * 0.5, 0.0);
+            let choose_mat = next_f32();
+            let centre = Vec3::new(a as f32 + 0.9 * next_f32(), 0.2, b as f32 + 0.9 * next_f32());
+            let centre_2 = centre + Vec3::new(0.0, next_f32() * 0.5, 0.0);
 
             if (centre - Point::new(4.0, 0.2, 0.0)).length() <= 0.9 { continue }
 
@@ -57,29 +62,39 @@ fn main() {
                 mat = Material::Lambertian { albedo };
             } else if choose_mat < 0.95 {
                 let albedo = Colour::random_range(Interval::new(0.5, 1.0));
-                let fuzz = next_f64_range(Interval::new(0.0, 0.5));
+                let fuzz = next_f32_range(Interval::new(0.0, 0.5));
                 mat = Material::Metal { albedo, fuzz_radius: fuzz };
             } else {
                 mat = Material::Dielectric { refraction_index: 1.5 }
             }
 
-            world.push(Hittable::MovingSphere { centre: Ray::new(centre, centre_2-centre, 0.0), radius: 0.2, mat });
+            world.push(Hittable::moving_sphere(centre, centre_2, 0.2, mat ));
         }
-    }
-    */
+    }*/
 
     let mat = Material::Dielectric { refraction_index: 1.5 };
-    world.push(Hittable::Sphere { centre: Point::new(0.0, 1.0, 0.0), radius: 1.0, mat});
+    world.push(Hittable::sphere(Point::new(0.0, 1.0, 0.0), 1.0, mat));
 
     let mat = Material::Lambertian { albedo: Colour::new(0.4, 0.2, 0.1) };
-    world.push(Hittable::Sphere { centre: Point::new(-4.0, 1.0, 0.0), radius: 1.0, mat });
+    world.push(Hittable::sphere(Point::new(-4.0, 1.0, 0.0), 1.0, mat));
 
     let mat = Material::Metal { albedo: Colour::new(0.7, 0.6, 0.5), fuzz_radius: 0.0 };
-    world.push(Hittable::Sphere { centre: Point::new(4.0, 1.0, 0.0), radius: 1.0, mat });
+    world.push(Hittable::sphere(Point::new(4.0, 1.0, 0.0), 1.0, mat));
 
-    let world = Hittable::List(world);
+    let world = Hittable::bvh(&arena, &world);
+    // let world = Hittable::list(world);
     
     println!("Set up in {}ms", time.elapsed().as_millis());
+
+    let mut args = env::args();
+    args.next();
+
+    if args.next().is_some_and(|x| &x == "image") {
+        render_image(camera, world);
+        return;
+    }
+
+    // else, raylib
 
     // Raylib
     let (mut rl, th) = raylib::init()
@@ -92,14 +107,18 @@ fn main() {
     let mut first_mouse_input = true;
     let mut dt;
     while !rl.window_should_close() {
-        dt = rl.get_frame_time() as f64;
+        dt = rl.get_frame_time();
 
         let mouse_movement = rl.get_mouse_delta() * SENSITIVITY;
         if !first_mouse_input {
-            camera.change_pitch_yaw_by(-mouse_movement.y as f64, mouse_movement.x as f64);
+            camera.change_pitch_yaw_by(-mouse_movement.y, mouse_movement.x);
         }
 
         if mouse_movement != raylib::prelude::Vector2::zero() { first_mouse_input = false }
+
+        if rl.is_key_down(raylib::ffi::KeyboardKey::KEY_LEFT_SHIFT) {
+            dt *= 50.0;
+        }
 
         if rl.is_key_down(raylib::ffi::KeyboardKey::KEY_S) {
             camera.move_by(dt * CAMERA_SPEED * camera.backward());
@@ -145,10 +164,31 @@ fn main() {
                                Vector2::new(0.0, 0.0), 0.0, raylib::color::Color::WHITE);
 
         brush.draw_fps(0, 0);
-        brush.draw_text(camera.pitch.to_string().as_str(), 0, 16, 16, raylib::color::Color::RED);
-        brush.draw_text(camera.yaw.to_string().as_str(), 0, 32, 16, raylib::color::Color::RED);
+        brush.draw_text(format!("pitch: {}, yaw: {}", camera.pitch, camera.yaw).as_str(), 0, 16, 16, raylib::color::Color::RED);
+        brush.draw_text(format!("x: {}, y: {}, z: {}", camera.position.x, camera.position.y, camera.position.z).as_str(), 0, 32, 16, raylib::color::Color::RED);
         println!("Drawn in {}ms", time.elapsed().as_millis());
     }
 
 }
+
+fn render_image(mut camera: Camera, world: Hittable) {
+    let time = Instant::now();
+    let data = camera.render(&world);
+    println!("Rendered in {}ms", time.elapsed().as_millis());
+
+    let mut string = String::new();
+    string.push_str("P3\n");
+    string.push_str(format!("{} {}\n", RENDER_RESOLUTION_X, RENDER_RESOLUTION).as_str());
+    string.push_str("255\n");
+
+    for d in data {
+        let r = (d.x * 255.999) as u8;
+        let g = (d.y * 255.999) as u8;
+        let b = (d.z * 255.999) as u8;
+        string.push_str(&format!("{} {} {} ", r, g, b));
+    }
+
+    fs::write("out.ppm", &string).unwrap();
+}
+
 

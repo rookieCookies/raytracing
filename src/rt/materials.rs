@@ -1,4 +1,4 @@
-use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rt::hittable::HitRecord, rng::next_f64};
+use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rt::hittable::HitRecord, rng::next_f32};
 
 #[derive(Default, Clone, Copy)]
 pub enum Material {
@@ -8,11 +8,11 @@ pub enum Material {
 
     Metal {
         albedo: Colour,
-        fuzz_radius: f64,
+        fuzz_radius: f32,
     },
 
     Dielectric {
-        refraction_index: f64,
+        refraction_index: f32,
     },
 
     #[default]
@@ -53,7 +53,7 @@ impl Material {
                 let sin_theta = (1.0 - cos_theta*cos_theta).sqrt();
 
                 let cannot_refract = refraction_ratio * sin_theta > 1.0;
-                let direction = if cannot_refract || reflectance(cos_theta, refraction_ratio) > next_f64() {
+                let direction = if cannot_refract || reflectance(cos_theta, refraction_ratio) > next_f32() {
                     unit_dir.reflect(rec.normal)
                 } else {
                     unit_dir.refract(rec.normal, refraction_ratio)
@@ -68,7 +68,7 @@ impl Material {
 }
 
 
-fn reflectance(cos: f64, rr: f64) -> f64 {
+fn reflectance(cos: f32, rr: f32) -> f32 {
     // Use Schlic's approximation for reflectance
     let r0 = (1.0-rr) / (1.0+rr);
     let r0 = r0*r0;

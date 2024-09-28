@@ -41,7 +41,7 @@ pub fn next() -> u64 {
 
 
 #[inline(always)]
-pub fn next_f64() -> f64 {
+pub fn next_f32() -> f32{
     const FRACTION_BITS : u64 = 52;
 
     let float_size = std::mem::size_of::<f64>() as u64 * 8;
@@ -50,11 +50,11 @@ pub fn next_f64() -> f64 {
 
     let value : u64 = next();
     let value = value >> (float_size - precision);
-    scale * (value as f64)
+    (scale * (value as f64)) as f32
 }
 
 
 #[inline(always)]
-pub fn next_f64_range(r: Interval) -> f64 {
-    r.min + (r.max - r.min) * next_f64()
+pub fn next_f32_range(r: Interval) -> f32 {
+    r.min + (r.max - r.min) * next_f32()
 }
