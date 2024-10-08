@@ -1,10 +1,8 @@
-use raylib::color::Color;
-
-use crate::{math::{matrix::Matrix, vec3::{Colour, Vec3}}, rt::{camera::RaytracingCamera, hittable::Hittable}};
+use crate::{math::vec3::{Colour, Point, Vec3}, rt::{camera::RaytracingCamera, hittable::Hittable, materials::Material, texture::Texture}};
 
 
 #[derive(Clone)]
-pub struct Camera {
+pub struct Camera<'a> {
     pub position: Vec3,
     direction: Vec3,
 
@@ -17,15 +15,18 @@ pub struct Camera {
     focus_dist: f32,
     pub rt_cam: RaytracingCamera,
     
-    colours: Vec<Colour>,
+
+    acc_colours: Vec<Colour>, 
+    pub samples: usize,
+    world: Hittable<'a>,
 }
 
-impl Camera {
+impl<'a> Camera<'a> {
     pub fn new(position: Vec3, direction: Vec3,
-               aspect_ratio: f32, width: usize, samples_per_pixel: usize,
+               aspect_ratio: f32, width: usize,
                max_depth: usize, vfov: f32, 
                vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
-        let rc = RaytracingCamera::new(aspect_ratio, width, samples_per_pixel, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist);
+        let rc = RaytracingCamera::new(aspect_ratio, width, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist);
 
         let height = {
             let val = (width as f32 / aspect_ratio) as usize;
@@ -40,17 +41,24 @@ impl Camera {
             vup,
             focus_dist,
             rt_cam: rc,
-            colours: Vec::from_iter((0..width * height).map(|_| Colour::ZERO)),
+            acc_colours: Vec::from_iter((0..width * height).map(|_| Colour::ZERO)),
             pitch: 0.0,
             yaw: 0.0,
+            samples: 0,
+            world: Hittable::sphere(Point::ONE, 1.0, Material::Lambertian { texture: Texture::SolidColour(Colour::ONE) }),
         }
     }
 
 
-    pub fn render(&mut self, world: &Hittable) -> &[Colour] {
+    pub fn set_world(&mut self, world: Hittable<'a>) {
+        self.world = world;
+    }
+
+
+    pub fn render(&mut self, buff: &mut [u32]) {
         self.update_render();
-        unsafe { self.rt_cam.render(&mut self.colours, world) };
-        &self.colours
+        self.samples += 1;
+        unsafe { self.rt_cam.render(&mut self.acc_colours, buff, self.samples, &self.world) };
     }
 
 
@@ -62,15 +70,25 @@ impl Camera {
         );
 
         let render = RaytracingCamera::new(self.aspect_ratio, self.rt_cam.image.0,
-                                       self.rt_cam.samples_per_pixel, self.rt_cam.max_depth,
+                                       self.rt_cam.max_depth,
                                        self.vfov, self.position, self.position + direction,
                                        self.vup, self.rt_cam.defocus_angle, self.focus_dist);
         self.rt_cam = render;
+
+        if self.samples == 0 {
+            self.acc_colours.iter_mut()
+                .for_each(|x|{
+                    *x = Colour::ZERO;
+                });
+        }
     }
 
 
     pub fn move_by(&mut self, step: Vec3) {
         self.position += step;
+        if step != Vec3::ZERO {
+            self.samples = 0;
+        }
     }
 
 
@@ -103,6 +121,9 @@ impl Camera {
             self.pitch.to_radians().sin(),
             self.yaw.to_radians().sin() * self.pitch.to_radians().cos()
         );
+        if delta_pitch != 0.0 || delta_yaw != 0.0 {
+            self.samples = 0;
+        }
     }
 }
 

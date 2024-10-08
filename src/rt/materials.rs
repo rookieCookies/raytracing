@@ -1,18 +1,21 @@
 use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rt::hittable::HitRecord, rng::next_f32};
 
+use super::texture::Texture;
+
 #[derive(Default, Clone, Copy)]
-pub enum Material {
+pub enum Material<'a> {
     Lambertian {
-        albedo: Colour,
+        texture: Texture<'a>,
     },
 
     Metal {
-        albedo: Colour,
+        texture: Texture<'a>,
         fuzz_radius: f32,
     },
 
     Dielectric {
         refraction_index: f32,
+        texture: Texture<'a>,
     },
 
     #[default]
@@ -20,31 +23,31 @@ pub enum Material {
 }
 
 
-impl Material {
+impl<'a> Material<'a> {
     pub fn scatter(self, ray_in: Ray, rec: &HitRecord) -> Option<(Ray, Colour)> {
         match self {
-            Material::Lambertian { albedo } => {
+            Material::Lambertian { texture } => {
                 let mut scatter_dir = rec.normal + Vec3::random_unit();
 
                 if scatter_dir.near_zero() { scatter_dir = rec.normal };
 
                 let scatter_dir = scatter_dir;
                 let scattered = Ray::new(rec.point, scatter_dir, ray_in.time);
-                Some((scattered, albedo))
+                Some((scattered, texture.value(rec.u, rec.v, rec.point)))
             },
 
-            Material::Metal { albedo, fuzz_radius } => {
+            Material::Metal { texture, fuzz_radius } => {
                 let fuzz_radius = fuzz_radius.min(1.0);
                 let reflected = ray_in.direction.unit().reflect(rec.normal);
                 let scattered = Ray::new(rec.point, reflected + fuzz_radius * Vec3::random_unit(), ray_in.time);
 
                 if scattered.direction.dot(rec.normal) > 0.0 {
-                    Some((scattered, albedo))
+                    Some((scattered, texture.value(rec.u, rec.v, rec.point)))
                 } else { None }
             },
 
-            Material::Dielectric { refraction_index } => {
-                let attenuation = Colour::new(1.0, 1.0, 1.0);
+            Material::Dielectric { texture, refraction_index } => {
+                let attenuation = texture.value(rec.u, rec.v, rec.point);
                 let refraction_ratio = if rec.front_face { 1.0 / refraction_index }
                                        else { refraction_index };
 

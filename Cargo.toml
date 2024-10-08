@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 rayon = "*"
 sti = { git = "https://github.com/leddoo/sti" }
-raylib = "*"
+sdl2 = "*"
+image = "*"

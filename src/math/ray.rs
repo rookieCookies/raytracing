@@ -22,8 +22,7 @@ impl Ray {
 
     #[inline(always)]
     pub fn colour(self, world: &Hittable, depth: usize) -> Colour {
-        if depth == 0 { return Colour::new(0.0, 0.0, 0.0) }
-
+        if depth == 0 { return Colour::ZERO }
         let mut rec = HitRecord::default();
         if world.hit(self, Interval::new(0.001, f32::INFINITY), &mut rec) {
             if let Some((scattered, attenuation)) = rec.material.scatter(self, &rec) {

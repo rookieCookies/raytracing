@@ -1,16 +1,18 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, f32::consts::PI};
 
 use sti::{arena::Arena, traits::FromIn};
 
 use crate::{math::{aabb::AABB, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, rng::next, rt::materials::Material};
 
 #[derive(Clone, Default)]
-pub struct HitRecord {
+pub struct HitRecord<'a> {
     pub point: Point,
     pub normal: Vec3,
     pub t: f32,
     pub front_face: bool,
-    pub material: Material,
+    pub material: Material<'a>,
+    pub u: f32,
+    pub v: f32,
 }
 
 
@@ -24,13 +26,13 @@ pub struct Hittable<'a> {
 #[derive(Clone)]
 pub enum HittableKind<'a> {
     List(&'a [Hittable<'a>]),
-    Sphere { centre: Point, radius: f32, mat: Material },
-    MovingSphere { centre: Ray, radius: f32, mat: Material },
+    Sphere { centre: Point, radius: f32, mat: Material<'a> },
+    MovingSphere { centre: Ray, radius: f32, mat: Material<'a> },
     BVH { left: &'a Hittable<'a>, right: &'a Hittable<'a> }
 }
 
 
-impl HitRecord {
+impl HitRecord<'_> {
     ///
     /// Sets the hit record normal vector
     /// `outward_normal` is assumed to have unit length
@@ -43,8 +45,8 @@ impl HitRecord {
 
 
 
-impl Hittable<'_> {
-    pub fn sphere<'a>(centre: Point, radius: f32, mat: Material) -> Hittable<'a> {
+impl<'a> Hittable<'a> {
+    pub fn sphere(centre: Point, radius: f32, mat: Material<'a>) -> Hittable<'a> {
         let rvec = Vec3::new(radius, radius, radius);
         let aabb = AABB::from_points(centre - rvec, centre + rvec);
         Hittable {
@@ -54,7 +56,7 @@ impl Hittable<'_> {
     }
 
 
-    pub fn moving_sphere<'a>(centre1: Point, centre2: Point, radius: f32, mat: Material) -> Hittable<'a> {
+    pub fn moving_sphere(centre1: Point, centre2: Point, radius: f32, mat: Material<'a>) -> Hittable<'a> {
         let centre = Ray::new(centre1, centre2 - centre1, 0.0);
 
         let rvec = Vec3::new(radius, radius, radius);
@@ -69,7 +71,7 @@ impl Hittable<'_> {
     }
 
 
-    pub fn list<'a>(list: &'a [Hittable<'a>]) -> Hittable<'a> {
+    pub fn list(list: &'a [Hittable<'a>]) -> Hittable<'a> {
         let mut aabb = AABB::new(Interval::EMPTY, Interval::EMPTY, Interval::EMPTY);
 
         for l in list {
@@ -82,7 +84,7 @@ impl Hittable<'_> {
         }
     }
 
-    pub fn bvh<'a>(arena: &'a Arena, list: &'a [Hittable<'a>]) -> Hittable<'a> {
+    pub fn bvh(arena: &'a Arena, list: &'a [Hittable<'a>]) -> Hittable<'a> {
         fn box_comp(a: &Hittable, b: &Hittable, axis: usize) -> bool {
             let a_axis_interval = a.bounding_box().axis_interval(axis);
             let b_axis_interval = b.bounding_box().axis_interval(axis);
@@ -123,7 +125,7 @@ impl Hittable<'_> {
     }
 
 
-    pub fn hit(&self, ray: Ray, t: Interval, rec: &mut HitRecord) -> bool {
+    pub fn hit(&self, ray: Ray, t: Interval, rec: &mut HitRecord<'a>) -> bool {
         match &self.kind {
             HittableKind::List(vec) => {
                 let mut temp_rec = HitRecord::default();
@@ -163,6 +165,7 @@ impl Hittable<'_> {
                 rec.point = ray.at(rec.t);
                 let outward_normal = (rec.point - *centre) / *radius;
                 rec.set_face_normal(ray, outward_normal);
+                (rec.u, rec.v) = get_sphere_uv(outward_normal);
                 rec.material = *mat;
 
                 true
@@ -192,6 +195,7 @@ impl Hittable<'_> {
                 rec.point = ray.at(rec.t);
                 let outward_normal = (rec.point - current_centre) / *radius;
                 rec.set_face_normal(ray, outward_normal);
+                (rec.u, rec.v) = get_sphere_uv(outward_normal);
                 rec.material = *mat;
 
                 true
@@ -213,8 +217,27 @@ impl Hittable<'_> {
     }
 
 
+    /*
+    pub fn hit(&self, ray: Ray, t: Interval, rec: &mut HitRecord<'a>) -> bool {
+        false
+    }*/
+
+
     pub fn bounding_box(&self) -> &AABB {
         &self.aabb
     }
 }
 
+
+fn get_sphere_uv(p: Point) -> (f32, f32) {
+    // p: a given point on the sphere of radius one, centered at the origin.
+    // u: returned value [0,1] of angle around the Y axis from X=-1.
+    // v: returned value [0,1] of angle from Y=-1 to Y=+1.
+    //     <1 0 0> yields <0.50 0.50>       <-1  0  0> yields <0.00 0.50>
+    //     <0 1 0> yields <0.50 1.00>       < 0 -1  0> yields <0.50 0.00>
+    //     <0 0 1> yields <0.25 0.50>       < 0  0 -1> yields <0.75 0.50>
+
+    let theta = (-p.y).acos();
+    let phi = (-p.z).atan2(p.x) + PI;
+    (phi/(2.0*PI), theta/PI)
+}

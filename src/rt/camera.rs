@@ -1,8 +1,8 @@
-use std::sync::atomic::AtomicUsize;
+use std::{f32::consts::E, sync::atomic::AtomicUsize};
 
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
-use crate::{math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::next_f32, utils::SendPtr};
+use crate::{math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::next_f32, utils::SendPtr, RENDER_RESOLUTION};
 
 use super::hittable::Hittable;
 
@@ -13,7 +13,6 @@ pub struct RaytracingCamera {
     pub pixel00_loc: Vec3,
     pub pixel_delta_u: Vec3,
     pub pixel_delta_v: Vec3,
-    pub samples_per_pixel: usize,
     pub max_depth: usize,
     pub defocus_angle: f32,
     pub defocus_disk_u: Vec3,
@@ -21,7 +20,7 @@ pub struct RaytracingCamera {
 }
 
 impl RaytracingCamera {
-    pub fn new(aspect_ratio: f32, width: usize, samples_per_pixel: usize,
+    pub fn new(aspect_ratio: f32, width: usize,
                max_depth: usize, vfov: f32, look_from: Vec3, look_at: Vec3,
                vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
 
@@ -65,7 +64,6 @@ impl RaytracingCamera {
             pixel00_loc,
             pixel_delta_u,
             pixel_delta_v,
-            samples_per_pixel,
             max_depth,
             defocus_angle,
             defocus_disk_u,
@@ -76,43 +74,57 @@ impl RaytracingCamera {
 
     /// # Undefined Behaviour
     /// - If `colours.len()` != image.x * image.y
-    pub unsafe fn render(&self, colours: &mut [Colour], world: &Hittable) {
-        debug_assert_eq!(colours.len(), self.image.0 * self.image.1);
+    pub unsafe fn render(&self, acc_colours: &mut [Colour], final_colours: &mut [u32], samples: usize, world: &Hittable) {
+        debug_assert_eq!(acc_colours.len(), self.image.0 * self.image.1);
+        debug_assert_eq!(final_colours.len(), self.image.0 * self.image.1);
 
         {
-            let ptr = SendPtr(colours.as_mut_ptr());
+            let acc_ptr = SendPtr(acc_colours.as_mut_ptr());
 
+            let final_ptr = SendPtr(final_colours.as_mut_ptr());
+
+            let samples = 1.0 / samples as f32;
             // i have never cared less about UB as i have here
             (0..self.image.1).par_bridge()
                 .for_each(move |y| {
-                    let ptr = ptr;
-                    let mut ptr = unsafe { ptr.0.offset((y*self.image.0) as isize) };
+                    let acc_ptr = acc_ptr;
+                    let final_ptr = final_ptr;
+
+                    let mut acc_ptr = unsafe { acc_ptr.0.offset((y*self.image.0) as isize) };
+                    let mut final_ptr = unsafe { final_ptr.0.offset((y*self.image.0) as isize) };
+
                     for x in 0..self.image.0 {
                         let colour = self.colour_of(world, x, y);
-                        unsafe { ptr.write(colour) };
-                        ptr = unsafe { ptr.add(1) };
+
+                        unsafe { acc_ptr.write(acc_ptr.read() + colour) };
+                        
+                        {
+                            let colour = samples * unsafe { acc_ptr.read() };
+                            let r = (colour.x * 255.999) as u32;
+                            let g = (colour.y * 255.999) as u32;
+                            let b = (colour.z * 255.999) as u32;
+
+                            let val = (r << 16) | (g << 8) | (b);
+                            unsafe { final_ptr.write(val) };
+
+                        }
+
+                        //unsafe { final_ptr.write(acc_ptr.read() / samples as f32) };
+                        acc_ptr = unsafe { acc_ptr.add(1) };
+                        final_ptr = unsafe { final_ptr.add(1) };
                     }
+
+                    //println!("{}/{}, sample: {}", count.fetch_add(1, std::sync::atomic::Ordering::Relaxed), RENDER_RESOLUTION, samples);
                 });
-            
         }
     }
 
     
     fn colour_of(&self, world: &Hittable, x: usize, y: usize) -> Colour {
         // calculate the colour
-        let mut colour = Colour::new(0.0, 0.0, 0.0);
-        for _ in 0..self.samples_per_pixel {
-            let ray = self.get_ray(x, y);
-            colour += ray.colour(&world, self.max_depth);
-        }
-
-        // finalise
-        let scale = 1.0 / self.samples_per_pixel as f32;
-        colour.x *= scale;
-        colour.y *= scale;
-        colour.z *= scale;
-
-
+        let ray = self.get_ray(x, y);
+        let mut colour = ray.colour(&world, self.max_depth);
+        
         // Linear -> Gamma
         colour.x = linear_to_gamma(colour.x);
         colour.y = linear_to_gamma(colour.y);
@@ -155,6 +167,5 @@ impl RaytracingCamera {
 /// Transforms a colour from linear space to gamma space
 #[inline(always)]
 fn linear_to_gamma(linear_comp: f32) -> f32 {
-    if linear_comp > 0.0 { linear_comp.sqrt() }
-    else { linear_comp }
+    linear_comp.sqrt()
 }
