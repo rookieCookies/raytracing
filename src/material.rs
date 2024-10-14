@@ -1,4 +1,4 @@
-use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rt::hittable::HitRecord, rng::next_f32};
+use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rng::Seed, hittable::HitRecord};
 
 use super::texture::Texture;
 
@@ -19,15 +19,15 @@ pub enum Material<'a> {
     },
 
     #[default]
-    Unknown,
+    NotFound,
 }
 
 
 impl<'a> Material<'a> {
-    pub fn scatter(self, ray_in: Ray, rec: &HitRecord) -> Option<(Ray, Colour)> {
+    pub fn scatter(self, seed: &mut Seed, ray_in: &Ray, rec: &HitRecord) -> Option<(Ray, Colour)> {
         match self {
             Material::Lambertian { texture } => {
-                let mut scatter_dir = rec.normal + Vec3::random_unit();
+                let mut scatter_dir = rec.normal + Vec3::random_unit(seed);
 
                 if scatter_dir.near_zero() { scatter_dir = rec.normal };
 
@@ -39,7 +39,7 @@ impl<'a> Material<'a> {
             Material::Metal { texture, fuzz_radius } => {
                 let fuzz_radius = fuzz_radius.min(1.0);
                 let reflected = ray_in.direction.unit().reflect(rec.normal);
-                let scattered = Ray::new(rec.point, reflected + fuzz_radius * Vec3::random_unit(), ray_in.time);
+                let scattered = Ray::new(rec.point, reflected + fuzz_radius * Vec3::random_unit(seed), ray_in.time);
 
                 if scattered.direction.dot(rec.normal) > 0.0 {
                     Some((scattered, texture.value(rec.u, rec.v, rec.point)))
@@ -56,7 +56,7 @@ impl<'a> Material<'a> {
                 let sin_theta = (1.0 - cos_theta*cos_theta).sqrt();
 
                 let cannot_refract = refraction_ratio * sin_theta > 1.0;
-                let direction = if cannot_refract || reflectance(cos_theta, refraction_ratio) > next_f32() {
+                let direction = if cannot_refract || reflectance(cos_theta, refraction_ratio) > seed.next_f32() {
                     unit_dir.reflect(rec.normal)
                 } else {
                     unit_dir.refract(rec.normal, refraction_ratio)
@@ -65,7 +65,7 @@ impl<'a> Material<'a> {
                 Some((Ray::new(rec.point, direction, ray_in.time), attenuation))
             },
 
-            Material::Unknown => unimplemented!(),
+            Material::NotFound => unimplemented!(),
         }
     }
 }

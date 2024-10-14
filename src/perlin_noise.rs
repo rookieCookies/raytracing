@@ -1,8 +1,8 @@
-use std::ops::Sub;
+use std::{ops::Sub, simd::{f32x4, StdFloat}};
 
 use sti::arena::Arena;
 
-use crate::{math::vec3::{Point, Vec3}, rng::{next, next_f32}};
+use crate::{math::vec3::{Point, Vec3}, rng::{Seed}};
 
 #[derive(Clone, Copy)]
 pub struct PerlinNoise<'a> {
@@ -14,19 +14,19 @@ pub struct PerlinNoise<'a> {
 
 
 impl<'a> PerlinNoise<'a> {
-    pub fn new(arena: &'a Arena, point_count: usize) -> Self {
+    pub fn new(arena: &'a Arena, seed: &mut Seed, point_count: usize) -> Self {
         let mut rand_floats = sti::vec::Vec::with_cap_in(arena, point_count);
         let mut perm_x = sti::vec::Vec::with_cap_in(arena, point_count);
         let mut perm_y = sti::vec::Vec::with_cap_in(arena, point_count);
         let mut perm_z = sti::vec::Vec::with_cap_in(arena, point_count);
 
         for _ in 0..point_count {
-            rand_floats.push(Vec3::random_unit());
+            rand_floats.push(Vec3::random_unit(seed));
         }
 
-        perlin_generate_perm(&mut perm_x, point_count);
-        perlin_generate_perm(&mut perm_y, point_count);
-        perlin_generate_perm(&mut perm_z, point_count);
+        perlin_generate_perm(seed, &mut perm_x, point_count);
+        perlin_generate_perm(seed, &mut perm_y, point_count);
+        perlin_generate_perm(seed, &mut perm_z, point_count);
 
         Self {
             rand_floats: rand_floats.leak(),
@@ -37,16 +37,16 @@ impl<'a> PerlinNoise<'a> {
     }
 
     pub fn noise(&self, p: Vec3) -> f32 {
-        let u = p.x - p.x.floor();
-        let v = p.y - p.y.floor();
-        let w = p.z - p.z.floor();
+        let uvw = p.axes - p.axes.floor();
+        let ijk = p.axes.floor();
 
+        let u = uvw[0];
+        let v = uvw[1];
+        let w = uvw[2];
 
-
-
-        let i = p.x.floor() as isize;
-        let j = p.y.floor() as isize;
-        let k = p.z.floor() as isize;
+        let i = ijk[0] as isize;
+        let j = ijk[1] as isize;
+        let k = ijk[2] as isize;
 
         let mut c = [[[Vec3::ZERO; 2]; 2]; 2];
         for di in 0..2isize {
@@ -61,9 +61,10 @@ impl<'a> PerlinNoise<'a> {
             }
         }
 
-        let uu = u*u*(3.0-2.0*u);
-        let vv = v*v*(3.0-2.0*v);
-        let ww = w*w*(3.0-2.0*w);
+        let uuvvww = uvw * uvw * (f32x4::splat(3.0) - f32x4::splat(2.0)*uvw);
+        let uu = uuvvww[0];
+        let vv = uuvvww[1];
+        let ww = uuvvww[2];
 
         let mut accum = 0.0;
 
@@ -100,20 +101,20 @@ impl<'a> PerlinNoise<'a> {
 }
 
 
-fn perlin_generate_perm(p: &mut sti::vec::Vec<usize, &Arena>, point_count: usize) {
+fn perlin_generate_perm(seed: &mut Seed, p: &mut sti::vec::Vec<usize, &Arena>, point_count: usize) {
     debug_assert_eq!(p.len(), 0);
 
     for i in 0..point_count {
         p.push(i)
     }
 
-    permute(p, point_count)
+    permute(seed, p, point_count)
 }
 
 
-fn permute(p: &mut sti::vec::Vec<usize, &Arena>, point_count: usize) {
+fn permute(seed: &mut Seed, p: &mut sti::vec::Vec<usize, &Arena>, point_count: usize) {
     for i in 0..point_count {
-        let target = next() as usize % (i+1);
+        let target = seed.next() as usize % (i+1);
         p.swap(i, target)
     }
 }

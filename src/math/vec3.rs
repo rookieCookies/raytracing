@@ -1,6 +1,6 @@
-use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, Mul, MulAssign, Neg, Sub}};
+use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub}, simd::{cmp::SimdPartialOrd, f32x4, num::SimdFloat}};
 
-use crate::rng::{next_f32, next_f32_range};
+use crate::rng::Seed;
 
 use super::{interval::Interval, matrix::Matrix};
 
@@ -9,9 +9,8 @@ pub type Colour = Vec3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Vec3 {
-    pub x : f32,
-    pub y : f32,
-    pub z : f32,
+    // the 4th axis is 0
+    pub axes: f32x4,
 }
 
 
@@ -21,44 +20,53 @@ impl Vec3 {
 
     #[inline(always)]
     pub const fn new(x: f32, y: f32, z: f32) -> Vec3 {
-        Vec3 { x, y, z }
+        Vec3 { axes: f32x4::from_array([x, y, z, 0.0]) }
+    }
+
+
+    #[inline(always)]
+    pub unsafe fn new_simd(simd: f32x4) -> Vec3 {
+        debug_assert_eq!(simd[3], 0.0);
+
+        Vec3 { axes: simd }
+    }
+
+
+    #[inline(always)]
+    pub fn random(seed: &mut Seed) -> Vec3 {
+        Self::new(seed.next_f32(), seed.next_f32(), seed.next_f32())
     }
 
     #[inline(always)]
-    pub fn random() -> Vec3 {
-        Vec3 { x: next_f32(), y: next_f32(), z: next_f32() }
+    pub fn random_range(seed: &mut Seed, r: Interval) -> Vec3 {
+        Self::new(seed.next_f32_range(r), seed.next_f32_range(r), seed.next_f32_range(r))
     }
 
     #[inline(always)]
-    pub fn random_range(r: Interval) -> Vec3 {
-        Vec3 { x: next_f32_range(r), y: next_f32_range(r), z: next_f32_range(r) }
-    }
-
-    #[inline(always)]
-    pub fn random_in_unit_disk() -> Vec3 {
+    pub fn random_in_unit_disk(seed: &mut Seed) -> Vec3 {
         let range = Interval::new(-1.0, 1.0);
         loop {
-            let p = Vec3::new(next_f32_range(range), next_f32_range(range), 0.0);
+            let p = Vec3::new(seed.next_f32_range(range), seed.next_f32_range(range), 0.0);
             if p.length_squared() < 1.0 { return p }
         }
     }
 
     #[inline(always)]
-    pub fn random_in_unit_sphere() -> Vec3 {
+    pub fn random_in_unit_sphere(seed: &mut Seed) -> Vec3 {
         loop {
-            let p = Vec3::random_range(Interval::new(-1.0, 1.0));
+            let p = Vec3::random_range(seed, Interval::new(-1.0, 1.0));
             if p.length_squared() < 1.0 { return p }
         }
     }
 
     #[inline(always)]
-    pub fn random_unit() -> Vec3 {
-        Vec3::random_in_unit_sphere().unit()
+    pub fn random_unit(seed: &mut Seed) -> Vec3 {
+        Vec3::random_in_unit_sphere(seed).unit()
     }
 
     #[inline(always)]
-    pub fn random_on_hemisphere(normal: Vec3) -> Vec3 {
-        let vec = Vec3::random_unit();
+    pub fn random_on_hemisphere(seed: &mut Seed, normal: Vec3) -> Vec3 {
+        let vec = Vec3::random_unit(seed);
 
         if vec.dot(normal) > 0.0 { return vec }
         else { return -vec }
@@ -67,7 +75,7 @@ impl Vec3 {
     #[inline(always)]
     pub fn near_zero(self) -> bool {
         const TRESHOLD : f32 = 1e-8;
-        self.x.abs() < TRESHOLD && self.y.abs() < TRESHOLD && self.z.abs() < TRESHOLD 
+        self.axes.abs().simd_lt(f32x4::splat(TRESHOLD)).all()
     }
 
     #[inline(always)]
@@ -85,7 +93,7 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn length_squared(self) -> f32 {
-        self.x * self.x + self.y * self.y + self.z * self.z
+        self.axes.mul(self.axes).reduce_sum()
     }
 
     #[inline(always)]
@@ -93,32 +101,38 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn dot(self, rhs: Vec3) -> f32 {
-        self.x * rhs.x +
-        self.y * rhs.y +
-        self.z * rhs.z
+        self.axes.mul(rhs.axes).reduce_sum()
     }
 
     #[inline(always)]
     pub fn cross(self, rhs: Vec3) -> Vec3 {
-        Self::new(self.y * rhs.z - self.z * rhs.y,
-                  self.z * rhs.x - self.x * rhs.z,
-                  self.x * rhs.y - self.y * rhs.x)
+        let lyzx = f32x4::from_array([self.axes[1], self.axes[2], self.axes[0], 0.0]);
+        let ryzx = f32x4::from_array([rhs.axes[1], rhs.axes[2], rhs.axes[0], 0.0]);
+        let lzxy = f32x4::from_array([self.axes[2], self.axes[0], self.axes[1], 0.0]);
+        let rzxy = f32x4::from_array([rhs.axes[2], rhs.axes[0], rhs.axes[1], 0.0]);
+
+        let res = lyzx * rzxy - lzxy * ryzx;
+
+        unsafe { Self::new_simd(res) }
     }
+
 
     #[inline(always)]
     pub fn unit(self) -> Vec3 {
         self / self.length()
     }
 
+
     #[inline(always)]
     pub fn to_matrix(self) -> Matrix<4, 1, f32> {
         Matrix::new([
-            [self.x],
-            [self.y],
-            [self.z],
+            [self.axes[0]],
+            [self.axes[1]],
+            [self.axes[2]],
             [1.0],
         ])
     }
+
 }
 
 impl Default for Vec3 {
@@ -131,7 +145,7 @@ impl Neg for Vec3 {
     type Output = Self;
 
     #[inline(always)]
-    fn neg(self) -> Self::Output { Vec3::new(-self.x, -self.y, -self.z) }
+    fn neg(self) -> Self::Output { unsafe { Vec3::new_simd(self.axes.neg()) } }
 
 }
 
@@ -139,9 +153,7 @@ impl Neg for Vec3 {
 impl AddAssign for Vec3 {
     #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
-        self.x += rhs.x;
-        self.y += rhs.y;
-        self.z += rhs.z;
+        self.axes += rhs.axes;
     }
 }
 
@@ -149,9 +161,7 @@ impl AddAssign for Vec3 {
 impl MulAssign<f32> for Vec3 {
     #[inline(always)]
     fn mul_assign(&mut self, rhs: f32) {
-        self.x *= rhs;
-        self.y *= rhs;
-        self.z *= rhs;
+        self.axes *= f32x4::splat(rhs);
     }
 }
 
@@ -166,7 +176,7 @@ impl DivAssign<f32> for Vec3 {
 
 impl Display for Vec3 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {} {}", self.x, self.y, self.z)
+        write!(f, "{} {} {}", self[0], self[1], self[2])
     }
 }
 
@@ -175,7 +185,7 @@ impl Add for Vec3 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+        unsafe { Self::new_simd(self.axes + rhs.axes) }
     }
 }
 
@@ -184,7 +194,7 @@ impl Sub for Vec3 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+        unsafe { Self::new_simd(self.axes - rhs.axes) }
     }
 }
 
@@ -193,7 +203,7 @@ impl Mul<Vec3> for Vec3 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        Self::new(self.x * rhs.x, self.y * rhs.y, self.z * rhs.z)
+        unsafe { Self::new_simd(self.axes * rhs.axes) }
     }
 }
 
@@ -202,7 +212,7 @@ impl Mul<Vec3> for f32 {
     type Output = Vec3;
 
     fn mul(self, rhs: Vec3) -> Self::Output {
-        Vec3::new(self * rhs.x, self * rhs.y, self * rhs.z)
+        unsafe { Vec3::new_simd(f32x4::splat(self) * rhs.axes) }
     }
 }
 
@@ -220,9 +230,33 @@ impl Index<usize> for Vec3 {
     type Output = f32;
 
     fn index(&self, index: usize) -> &Self::Output {
-        if index == 0 { return &self.x }
-        if index == 1 { return &self.y }
-        if index == 2 { return &self.z }
+        if index == 0 { return &self.axes[0] }
+        if index == 1 { return &self.axes[1] }
+        if index == 2 { return &self.axes[2] }
         unreachable!()
+    }
+}
+
+impl IndexMut<usize> for Vec3 {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        if index == 0 { return &mut self.axes[0] }
+        if index == 1 { return &mut self.axes[1] }
+        if index == 2 { return &mut self.axes[2] }
+        unreachable!()
+    }
+}
+
+
+impl Colour {
+    pub fn to_rgba(mut self) -> u32 {
+        self.axes[0] = self[0].sqrt();
+        self.axes[1] = self[1].sqrt();
+        self.axes[2] = self[2].sqrt();
+
+        let r = (self[0] * 255.999) as u32;
+        let g = (self[1] * 255.999) as u32;
+        let b = (self[2] * 255.999) as u32;
+
+        (r << 0) | (g << 8) | (b << 16)
     }
 }

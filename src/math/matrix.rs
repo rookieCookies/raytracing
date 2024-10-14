@@ -7,7 +7,7 @@ pub struct Matrix<const ROW: usize, const COLUMN: usize, T> {
 
 
 impl<const ROW: usize, const COLUMN: usize, T> Matrix<ROW, COLUMN, T> {
-    const IDENTITY : Matrix<4, 4, f64> = Matrix {
+    pub const IDENTITY : Matrix<4, 4, f64> = Matrix {
         rows: [[1.0, 0.0, 0.0, 0.0],
                [0.0, 1.0, 0.0, 0.0],
                [0.0, 0.0, 1.0, 0.0],

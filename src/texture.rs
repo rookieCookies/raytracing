@@ -1,3 +1,5 @@
+use std::{ops::Mul, simd::{num::SimdFloat, StdFloat}};
+
 use image::Rgb32FImage;
 
 use crate::{math::{interval::Interval, vec3::{Colour, Point}}, perlin_noise::PerlinNoise};
@@ -30,11 +32,9 @@ impl<'a> Texture<'a> {
 
 
             Texture::Checkerboard { inv_scale, even, odd } => {
-                let x = (inv_scale * p.x).floor() as i32;
-                let y = (inv_scale * p.y).floor() as i32;
-                let z = (inv_scale * p.z).floor() as i32;
+                let xyz = (*inv_scale * p).axes.floor();
 
-                let is_even = (x + y + z) % 2 == 0;
+                let is_even = xyz.reduce_sum() as i32 % 2 == 0;
 
                 if is_even { even } else { odd }.value(u, v, p)
             },
@@ -54,7 +54,7 @@ impl<'a> Texture<'a> {
 
 
             Texture::NoiseTexture(noise, scale) => {
-                (1.0 + (scale * p.z + 10.0 * noise.turbulance(p, 7)).sin()) * Colour::new(0.5, 0.5, 0.5)
+                (1.0 + (scale * p[2] + 10.0 * noise.turbulance(p, 7)).sin()) * Colour::new(0.5, 0.5, 0.5)
             },
         }
     }

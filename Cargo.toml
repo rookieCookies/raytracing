@@ -1,12 +1,17 @@
 [package]
-name = "raytracing"
+name = "raytracing-improved"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+miri = []
+aabbx4 = []
 
 [dependencies]
-rayon = "*"
 sti = { git = "https://github.com/leddoo/sti" }
 sdl2 = "*"
 image = "*"
+rayon = "*"
+
+[profile.release]
+debug = 2
