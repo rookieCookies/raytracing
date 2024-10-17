@@ -12,6 +12,9 @@ pub struct Camera<'a> {
     pub position: Vec3,
     direction: Vec3,
 
+    pub display_scale: f32,
+    pub render_resolution: (usize, usize),
+
     pub pitch: f32,
     pub yaw: f32,
 
@@ -25,17 +28,16 @@ pub struct Camera<'a> {
     pub samples: usize,
     world: &'a mut Hittable<'a>,
 
-    seed: Seed,
-    arena: &'a Arena,
+    background_colour: Colour,
 }
 
 
 impl<'a> Camera<'a> {
     pub fn new(arena: &'a Arena, position: Vec3, direction: Vec3,
-               width: usize, height: usize,
-               max_depth: usize, vfov: f32, 
-               vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
-        let rc = RaytracingCamera::new(width, height, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist);
+               (width, height): (usize, usize), display_scale: f32,
+               max_depth: usize, vfov: f32,  vup: Vec3, defocus_angle: f32,
+               focus_dist: f32, background_colour: Colour) -> Self {
+        let rc = RaytracingCamera::new(width, height, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist, background_colour);
         Self {
             position,
             direction,
@@ -50,13 +52,15 @@ impl<'a> Camera<'a> {
             samples: 0,
             world: arena.alloc_new(Hittable::sphere(Sphere::new(Point::ZERO, 1.0,
                                                                 crate::material::Material::Lambertian { texture: crate::texture::Texture::SolidColour(Colour::ZERO) }))),
-            seed: Seed([1, 2, 3, 4]),
-            arena,
+            display_scale,
+            render_resolution: (width, height),
+            background_colour,
         }
     }
 
 
     pub fn set_world(&mut self, world: Hittable<'a>) {
+        self.samples = 0;
         *self.world = world;
     }
 
@@ -81,7 +85,7 @@ impl<'a> Camera<'a> {
         let render = RaytracingCamera::new(self.rt_cam.image_dimensions.0, self.rt_cam.image_dimensions.1,
                                        self.rt_cam.max_depth,
                                        self.vfov, self.position, self.position + direction,
-                                       self.vup, self.rt_cam.defocus_angle, self.focus_dist);
+                                       self.vup, self.rt_cam.defocus_angle, self.focus_dist, self.background_colour);
         self.rt_cam = render;
 
         self.acc_colours.iter_mut().for_each(|x| *x = Colour::ZERO);
@@ -145,13 +149,14 @@ pub struct RaytracingCamera {
     pub defocus_angle: f32,
     pub defocus_disk_u: Vec3,
     pub defocus_disk_v: Vec3,
+    pub background_colour: Colour,
 }
 
 
 impl RaytracingCamera {
     pub fn new(width: usize, height: usize,
                max_depth: usize, vfov: f32, look_from: Vec3, look_at: Vec3,
-               vup: Vec3, defocus_angle: f32, focus_dist: f32) -> Self {
+               vup: Vec3, defocus_angle: f32, focus_dist: f32, background_colour: Colour) -> Self {
         let centre = look_from;
 
         // Determine viewport dimensions
@@ -191,6 +196,7 @@ impl RaytracingCamera {
             defocus_angle,
             defocus_disk_u,
             defocus_disk_v,
+            background_colour,
         }
     }
 
@@ -218,7 +224,7 @@ impl RaytracingCamera {
 
                 for x in 0..self.image_dimensions.0 {
                     let ray = self.get_ray(&mut seed, x, y);
-                    let colour = ray.colour(&mut seed, world, &mut hittable_stack, self.max_depth);
+                    let colour = self.ray_colour(&mut seed, ray, world, &mut hittable_stack);
 
                     let colour = unsafe { acc_ptr.read() + colour };
                     unsafe { acc_ptr.write(colour) };
@@ -247,6 +253,48 @@ impl RaytracingCamera {
         let ray_time = seed.next_f32();
         Ray::new(ray_origin, ray_direction, ray_time)
 
+    }
+
+
+    fn ray_colour<'a>(&self, seed: &mut Seed, ray: Ray,
+                  world: &'a Hittable<'a>, hittable_stack: &mut Stack<&'a Hittable<'a>>) -> Colour {
+
+        struct Frame {
+            ray: Ray,
+            depth: usize,
+            multiplier: Vec3,
+        }
+
+
+        debug_assert!(hittable_stack.is_empty());
+        let mut active_frame = Frame { ray, depth: self.max_depth, multiplier: Vec3::ONE };
+        let mut rec = HitRecord::default();
+
+        loop {
+            let Frame { ray, depth, multiplier } = active_frame;
+
+            if depth == 0 { return Colour::ZERO }
+
+            let hit_anything = ray.hit_anything(&mut rec, world, hittable_stack);
+
+            // If the ray hits nothing, return the skybox
+            if !hit_anything {
+                return multiplier * self.background_colour 
+            }
+
+
+            let colour_from_emission = rec.material.emitted(rec.u, rec.v, rec.point);
+            let Some((scattered, attenuation)) = rec.material.scatter(seed, &ray, &rec)
+            else { return multiplier * colour_from_emission };
+
+            let frame = Frame {
+                ray: scattered,
+                depth: depth - 1,
+                multiplier: multiplier * attenuation + colour_from_emission,
+            };
+
+            active_frame = frame;
+        }
     }
 
     

@@ -1,4 +1,4 @@
-use crate::{math::{ray::Ray, vec3::{Colour, Vec3}}, rng::Seed, hittable::HitRecord};
+use crate::{hittable::HitRecord, math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::Seed};
 
 use super::texture::Texture;
 
@@ -15,6 +15,10 @@ pub enum Material<'a> {
 
     Dielectric {
         refraction_index: f32,
+        texture: Texture<'a>,
+    },
+
+    DiffuseLight {
         texture: Texture<'a>,
     },
 
@@ -65,7 +69,17 @@ impl<'a> Material<'a> {
                 Some((Ray::new(rec.point, direction, ray_in.time), attenuation))
             },
 
+            Material::DiffuseLight { .. } => None,
+
             Material::NotFound => unimplemented!(),
+        }
+    }
+
+
+    pub fn emitted(&self, u: f32, v: f32, p: Point) -> Colour {
+        match self {
+            Self::DiffuseLight { texture } => texture.value(u, v, p),
+            _ => Colour::ZERO,
         }
     }
 }

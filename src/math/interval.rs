@@ -8,6 +8,7 @@ pub struct Interval {
 impl Interval {
     pub const EMPTY    : Self = Self::new( f32::INFINITY, -f32::INFINITY);
     pub const UNIVERSE : Self = Self::new(-f32::INFINITY,  f32::INFINITY);
+    pub const UNIT     : Self = Self::new(0.0, 1.0);
 
     #[inline(always)]
     pub const fn new(min: f32, max: f32) -> Self { Self { min, max } }

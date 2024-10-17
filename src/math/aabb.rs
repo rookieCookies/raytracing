@@ -37,11 +37,11 @@ impl AABB {
 
 
     #[inline(always)]
-    pub fn hit(&self, ray: &Ray, ray_t: &mut Interval) -> bool {
+    pub fn hit(&self, ray: &Ray, inv_dir: f32x4, ray_t: &mut Interval) -> bool {
         let ray_origin = ray.origin;
         let ray_origin = f32x4::from_array([ray_origin[0], ray_origin[1], ray_origin[2], 0.0]);
-        let ray_idir = f32x4::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min]);
-        let ray_idir2 = f32x4::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max]);
+        let ray_idir = f32x4::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min]);
+        let ray_idir2 = f32x4::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max]);
 
         // self.mins & self.maxs's 4th element is 1 so we can multiply by ray_idir(2)
         // to set the 4th element as ray_t.min & ray_t.max respectively
@@ -81,6 +81,27 @@ impl AABB {
     }
 
 
+    pub fn pad_to_minimums(&mut self) {
+        let delta = 0.0001;
+        let delta_half = delta * 0.5;
+
+        if self.x().size() < delta {
+            self.mins[0] = self.mins[0] - delta_half;
+            self.maxs[0] = self.maxs[0] + delta_half;
+        }
+        
+        if self.y().size() < delta {
+            self.mins[1] = self.mins[1] - delta_half;
+            self.maxs[1] = self.maxs[1] + delta_half;
+        }
+
+        if self.z().size() < delta {
+            self.mins[2] = self.mins[2] - delta_half;
+            self.maxs[2] = self.maxs[2] + delta_half;
+        }
+
+    }
+
     pub fn x(&self) -> Interval { self.axis_interval(0) }
     pub fn y(&self) -> Interval { self.axis_interval(1) }
     pub fn z(&self) -> Interval { self.axis_interval(2) }
@@ -108,20 +129,20 @@ impl AABBx4 {
 
 
     #[inline(never)]
-    pub fn hit(&self, ray: &Ray, ray_t: Interval) -> (f32x4, f32x4, Mask<i32, 4>) {
+    pub fn hit(&self, ray: &Ray, inv_dir: f32x4, ray_t: Interval) -> (f32x4, f32x4, Mask<i32, 4>) {
         let ray_origin = ray.origin;
         let ray_origin = f32x16::from_array([ray_origin[0], ray_origin[1], ray_origin[2], 0.0,
                                             ray_origin[0], ray_origin[1], ray_origin[2], 0.0,
                                             ray_origin[0], ray_origin[1], ray_origin[2], 0.0,
                                             ray_origin[0], ray_origin[1], ray_origin[2], 0.0]);
-        let ray_idir = f32x16::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min,
-                                          ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min,
-                                          ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min,
-                                          ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min]);
-        let ray_idir2 = f32x16::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max,
-                                           ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max,
-                                           ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max,
-                                           ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max]);
+        let ray_idir = f32x16::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min,
+                                          inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min,
+                                          inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min,
+                                          inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min]);
+        let ray_idir2 = f32x16::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max,
+                                           inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max,
+                                           inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max,
+                                           inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max]);
 
         // self.mins & self.maxs's 4th element is 1 so we can multiply by ray_idir(2)
         // to set the 4th element as ray_t.min & ray_t.max respectively
@@ -210,12 +231,13 @@ impl AABBx2 {
     #[inline(always)]
     pub fn hit(&self, ray: &Ray, ray_t: Interval) -> [(Interval, bool); 2] {
         let ray_origin = ray.origin;
+        let inv_dir = f32x4::splat(1.0) / ray.direction.axes; 
         let ray_origin = f32x8::from_array([ray_origin[0], ray_origin[1], ray_origin[2], 0.0,
                                             ray_origin[0], ray_origin[1], ray_origin[2], 0.0]);
-        let ray_idir = f32x8::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min,
-                                            ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.min]);
-        let ray_idir2 = f32x8::from_array([ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max,
-                                            ray.inv_direction[0], ray.inv_direction[1], ray.inv_direction[2], ray_t.max]);
+        let ray_idir = f32x8::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min,
+                                            inv_dir[0], inv_dir[1], inv_dir[2], ray_t.min]);
+        let ray_idir2 = f32x8::from_array([inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max,
+                                            inv_dir[0], inv_dir[1], inv_dir[2], ray_t.max]);
 
         // self.mins & self.maxs's 4th element is 1 so we can multiply by ray_idir(2)
         // to set the 4th element as ray_t.min & ray_t.max respectively

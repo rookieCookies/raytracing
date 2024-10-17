@@ -1,34 +1,18 @@
-use std::{thread, time::{Duration, Instant}};
+use std::time::Instant;
 
-use raytracing_improved::{camera::{Camera, RaytracingCamera}, hittable::{Hittable, MovingSphere, Sphere}, material::Material, math::{interval::Interval, vec3::{Colour, Point, Vec3}}, rng::Seed, texture::Texture};
-use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::Rect, render::TextureAccess, sys::SDL_TouchDeviceType};
+use raytracing_improved::{camera::{Camera, RaytracingCamera}, hittable::{Hittable, MovingSphere, Quad, Sphere}, material::Material, math::{interval::Interval, vec3::{Colour, Point, Vec3}}, perlin_noise::PerlinNoise, rng::Seed, texture::Texture};
+use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::{Rect}, render::TextureAccess, sys::{quad_t, SDL_TouchDeviceType}};
 use sti::{arena::Arena, static_assert_eq};
-
-const ASPECT_RATIO : f32 = 16.0/10.0;
-
-const RENDER_HEIGHT : usize = 1080;
-const RENDER_WIDTH : usize = (RENDER_HEIGHT as f32 * ASPECT_RATIO) as usize;
-
-const DISPLAY_HEIGHT : usize = 640;
-const DISPLAY_WIDTH : usize = (DISPLAY_HEIGHT as f32 * ASPECT_RATIO) as usize;
 
 const SENSITIVITY : f32 = 0.05;
 const CAMERA_SPEED : f32 = 5.0;
 
-static_assert_eq!(DISPLAY_HEIGHT, ((DISPLAY_HEIGHT as f32 * ASPECT_RATIO) as usize as f32 / ASPECT_RATIO) as usize);
-static_assert_eq!(RENDER_HEIGHT, ((RENDER_HEIGHT as f32 * ASPECT_RATIO) as usize as f32 / ASPECT_RATIO) as usize);
-
-
 fn main() {
     // Camera
     let arena = Arena::new();
-    let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
-                             RENDER_WIDTH, RENDER_HEIGHT as usize, 25, 20.0,
-                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0);
 
-    camera.change_pitch_yaw_by(-15.0, 45.0);
 
-    camera.set_world(bouncing_spheres(&arena));
+    let mut camera = simple_light(&arena);
 
     #[cfg(feature="miri")]
     {
@@ -45,7 +29,9 @@ fn main() {
     let sdl_ctx = sdl2::init().unwrap();
     let video_subsystem = sdl_ctx.video().unwrap();
 
-    let mut window = video_subsystem.window("raytracing", DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)
+    let display_width = (camera.render_resolution.0 as f32 * camera.display_scale) as usize;
+    let display_height = (camera.render_resolution.1 as f32 * camera.display_scale) as usize;
+    let mut window = video_subsystem.window("raytracing", display_width as u32, display_height as u32)
         .position_centered()
         .build().unwrap();
 
@@ -58,7 +44,7 @@ fn main() {
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture(PixelFormatEnum::RGBA32, TextureAccess::Streaming,
-                        RENDER_WIDTH as u32, RENDER_HEIGHT as u32).unwrap();
+                        camera.render_resolution.0 as u32, camera.render_resolution.1 as u32).unwrap();
 
     let mut event_pump = sdl_ctx.event_pump().unwrap();
     let timer = sdl_ctx.timer().unwrap();
@@ -126,20 +112,74 @@ fn main() {
         let render = camera.render();
         println!("Rendered in {}ms", time.elapsed().as_millis());
 
-        texture.update(None, unsafe { core::mem::transmute(render) }, RENDER_WIDTH * size_of::<u32>()).unwrap();
+        println!("hi");
+        texture.update(None, unsafe { core::mem::transmute(render) }, camera.render_resolution.0 * size_of::<u32>()).unwrap();
+        println!("hi2");
 
         canvas.clear();
+        println!("hi3");
         canvas.copy(&texture,
-                    Some(Rect::new(0, 0, RENDER_WIDTH as u32, RENDER_HEIGHT as u32)),
-                    Some(Rect::new(0, 0, DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32)))
+                    Some(Rect::new(0, 0, camera.render_resolution.0 as u32, camera.render_resolution.1 as u32)),
+                    Some(Rect::new(0, 0, display_width as u32, display_height as u32)))
             .unwrap();
+        println!("hi4");
         canvas.present();
 
     }
 }
 
 
-fn bouncing_spheres<'a>(arena: &'a Arena) -> Hittable<'a> {
+fn simple_light<'a>(arena: &'a Arena) -> Camera<'a> {
+    let mut world = sti::vec::Vec::new_in(arena);
+
+    let pertext = Texture::NoiseTexture(PerlinNoise::new(arena, &mut Seed([1, 2, 3, 4]), 100), 4.0);
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1000.0, 0.0), 1000.0, Material::Lambertian { texture: pertext })));
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 2.0, 0.0), 2.0, Material::Lambertian { texture: pertext })));
+
+    let diff_light = Material::DiffuseLight { texture: Texture::SolidColour(Colour::new(4.0, 4.0, 4.0)) };
+    world.push(Hittable::quad(Quad::new(Point::new(3.0, 1.0, -2.0), Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 2.0, 0.0), diff_light)));
+
+
+    let mut camera = Camera::new(&arena, Point::new(26.0, 2.0, 6.0), Vec3::new(1.0, 0.0, 0.0),
+                             (1920, 1080), 1.0, 50, 20.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
+    camera.change_pitch_yaw_by(0.0, -90.0);
+
+    let world = Hittable::bvh(arena, world.leak());
+    camera.set_world(world);
+    camera
+}
+
+
+fn quads<'a>(arena: &'a Arena) -> Camera<'a> {
+    let left_red = Material::Lambertian { texture: Texture::SolidColour(Colour::new(1.0, 0.2, 0.2)) };
+    let back_green = Material::DiffuseLight { texture: Texture::SolidColour(Colour::new(0.2, 1.0, 0.2)) };
+    let right_blue = Material::Lambertian { texture: Texture::SolidColour(Colour::new(0.2, 0.2, 1.0)) };
+    let upper_orange = Material::Lambertian { texture: Texture::SolidColour(Colour::new(1.0, 0.5, 0.0)) };
+    let lower_teal = Material::Lambertian { texture: Texture::SolidColour(Colour::new(0.2, 0.8, 0.8)) };
+
+    
+    let mut world = sti::vec::Vec::new_in(arena);
+
+    world.push(Hittable::quad(Quad::new(Point::new(-3.0, -2.0, 5.0), Point::new( 0.0, 0.0, -4.0), Point::new(0.0, 4.0,  0.0), left_red)));
+    world.push(Hittable::quad(Quad::new(Point::new(-2.0, -2.0, 0.0), Point::new( 4.0, 0.0,  0.0), Point::new(0.0, 4.0,  0.0), back_green)));
+    world.push(Hittable::quad(Quad::new(Point::new( 3.0, -2.0, 1.0), Point::new( 0.0, 0.0,  4.0), Point::new(0.0, 4.0,  0.0), right_blue)));
+    world.push(Hittable::quad(Quad::new(Point::new(-2.0,  3.0, 1.0), Point::new( 4.0, 0.0,  0.0), Point::new(0.0, 0.0,  4.0), upper_orange)));
+    world.push(Hittable::quad(Quad::new(Point::new(-2.0, -3.0, 5.0), Point::new( 4.0, 0.0,  0.0), Point::new(0.0, 0.0, -4.0), lower_teal)));
+
+
+    let mut camera = Camera::new(&arena, Point::new(0.0, 0.0, 9.0), Vec3::new(1.0, 0.0, 0.0),
+                             (1080, 1080), 1.0, 50, 80.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.01, 0.01, 0.01));
+    camera.change_pitch_yaw_by(0.0, -90.0);
+
+    let world = Hittable::bvh(arena, world.leak());
+    camera.set_world(world);
+    camera
+}
+
+
+fn bouncing_spheres<'a>(arena: &'a Arena) -> Camera<'a> {
     let mut world = sti::vec::Vec::new_in(arena);
 
     let material_ground = Material::Lambertian { texture: Texture::Checkerboard { inv_scale: 0.64, even: arena.alloc_new(Texture::SolidColour(Colour::ZERO)), odd: arena.alloc_new(Texture::SolidColour(Colour::ONE)) } };
@@ -182,7 +222,50 @@ fn bouncing_spheres<'a>(arena: &'a Arena) -> Hittable<'a> {
     world.push(Hittable::sphere(Sphere::new(Point::new(4.0, 1.0, 0.0), 1.0, mat)));
 
     let world = Hittable::bvh(arena, world.leak());
-    world
+
+    let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
+                             (1728, 1080), 1.0, 25, 20.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
+
+    camera.set_world(world);
+    camera.change_pitch_yaw_by(-15.0, 45.0);
+    camera
 }
 
 
+fn world_sphere<'a>(arena: &'a Arena) -> Camera<'a> {
+    let mut world = sti::vec::Vec::new_in(arena);
+
+    let mut image = image::ImageReader::open("earthmap3.png").unwrap();
+    image.no_limits();
+    let image = image.decode().unwrap().into_rgb32f();
+    let image = arena.alloc_new(image);
+    let material_ground = Material::Lambertian { texture: Texture::Image { image } };
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 0.0, 0.0), 2.0, material_ground)));
+
+    let world = Hittable::bvh(&arena, world.leak());
+
+    let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
+                             (1728, 1080), 1.0, 25, 20.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
+
+    camera.set_world(world);
+    camera
+}
+
+
+fn checkered_spheres<'a>(arena: &'a Arena) -> Camera<'a> {
+    let mut world = sti::vec::Vec::new_in(arena);
+
+    let material_ground = Material::Lambertian { texture: Texture::Checkerboard { inv_scale: 1.0, even: arena.alloc_new(Texture::SolidColour(Colour::ZERO)), odd: arena.alloc_new(Texture::SolidColour(Colour::ONE)) } };
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -10.0, 0.0), 10.0, material_ground)));
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 10.0, 0.0), 10.0, material_ground)));
+
+    let world = Hittable::bvh(&arena, world.leak());
+    let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
+                             (1728, 1080), 1.0, 25, 20.0,
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
+
+    camera.set_world(world);
+    camera
+}

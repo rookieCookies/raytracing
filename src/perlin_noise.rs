@@ -52,10 +52,12 @@ impl<'a> PerlinNoise<'a> {
         for di in 0..2isize {
             for dj in 0..2isize {
                 for dk in 0..2isize {
-                    c[di as usize][dj as usize][dk as usize] = self.rand_floats [
-                        self.perm_x[((i+di) & 255) as usize % self.rand_floats.len()] ^
-                        self.perm_y[((j+dj) & 255) as usize % self.rand_floats.len()] ^
-                        self.perm_z[((k+dk) & 255) as usize % self.rand_floats.len()]
+                    c[di as usize][dj as usize][dk as usize] = self.rand_floats[
+                        (
+                            self.perm_x[((i+di) & 255) as usize % self.rand_floats.len()] ^
+                            self.perm_y[((j+dj) & 255) as usize % self.rand_floats.len()] ^
+                            self.perm_z[((k+dk) & 255) as usize % self.rand_floats.len()]
+                        ) % self.rand_floats.len()
                     ];
                 }
             }

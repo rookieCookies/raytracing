@@ -36,6 +36,7 @@ pub struct Hittable<'a> {
 pub enum HittableKind<'a> {
     Sphere(Sphere<'a>),
     MovingSphere(MovingSphere<'a>),
+    Quad(Quad<'a>),
     BVH {
         /*
         aabbs: AABBx4,
@@ -51,6 +52,11 @@ pub enum HittableKind<'a> {
 impl<'a> Hittable<'a> {
     pub fn sphere(sphere: Sphere<'a>) -> Self {
         Self { kind: HittableKind::Sphere(sphere) }
+    }
+
+
+    pub fn quad(quad: Quad<'a>) -> Self {
+        Self { kind: HittableKind::Quad(quad) }
     }
 
 
@@ -76,53 +82,18 @@ impl<'a> Hittable<'a> {
 
         let r1;
         let r2;
-        //let r3 : Option<&Hittable>;
-        //let r4 : Option<&Hittable>;
         if hittables.len() == 1 {
             r1 = &hittables[0];
             r2 = None;
         } else if hittables.len() == 2 {
             r1 = &hittables[0];
             r2 = Some(&hittables[1]);
-            /*
-            {
-                r3 = None;
-                r4 = None;
-            }
-            */
-        } else if hittables.len() == 3 {
-            r1 = &hittables[0];
-            r2 = Some(&hittables[1]);
-            /*
-            {
-                r3 = Some(&hittables[3]);
-                r4 = None;
-            }
-            */
-        } /*else if hittables.len() == 4 {
-            r1 = &hittables[0];
-            r2 = Some(&hittables[1]);
-            #[cfg(feature="aabbx4")]
-            {
-                r3 = Some(&hittables[3]);
-                r4 = Some(&hittables[4]);
-            }
-        }*/ else {
+        } else {
             let mut list = sti::vec::Vec::from_slice_in(arena, hittables);
             list.sort_by(|a, b| if box_comp(a, b, axis) { Ordering::Less } else { Ordering::Greater });
 
             let middle = list.len() / 2;
             let list = list.leak().split_at(middle);
-            /*
-            {
-                let list = (list.0.split_at(list.0.len()/2), list.1.split_at(list.1.len()/2));
-
-                r1 = arena.alloc_new(Hittable::bvh(arena, list.0.0));
-                r2 = Some(arena.alloc_new(Hittable::bvh(arena, list.0.1)));
-                r3 = Some(arena.alloc_new(Hittable::bvh(arena, list.1.0)));
-                r4 = Some(arena.alloc_new(Hittable::bvh(arena, list.1.1)));
-            }
-            */
 
             r1 = arena.alloc_new(Hittable::bvh(arena, list.0));
             r2 = Some(arena.alloc_new(Hittable::bvh(arena, list.1)));
@@ -159,6 +130,13 @@ impl<'a> Hittable<'a> {
                 let box1 = AABB::from_points(sphere.centre.at(0.0) - rvec, sphere.centre.at(0.0) + rvec);
                 let box2 = AABB::from_points(sphere.centre.at(1.0) - rvec, sphere.centre.at(1.0) + rvec);
                 AABB::from_aabbs(&box1, &box2)
+            },
+
+
+            HittableKind::Quad(quad) => {
+                let bbox_diag1 = AABB::from_points(quad.q, quad.q + quad.u + quad.v);
+                let bbox_diag2 = AABB::from_points(quad.q + quad.u, quad.q + quad.v);
+                AABB::from_aabbs(&bbox_diag1, &bbox_diag2)
             },
 
 
@@ -272,4 +250,62 @@ fn get_sphere_uv(p: Point) -> (f32, f32) {
     let theta = (-p[1]).acos();
     let phi = (-p[2]).atan2(p[0]) + PI;
     (phi/(2.0*PI), theta/PI)
+}
+
+
+#[derive(Clone)]
+pub struct Quad<'a> {
+    q: Point,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    normal: Vec3,
+    d: f32,
+    material: Material<'a>
+}
+
+impl<'a> Quad<'a> {
+    pub fn new(q: Point, u: Vec3, v: Vec3, material: Material<'a>) -> Self {
+        let n = u.cross(v);
+        let normal = n.unit();
+        let d = normal.dot(q);
+        let w = n / n.dot(n);
+        Self { q, u, v, normal, d, material, w }
+    }
+
+
+    pub fn hit(&self, ray: &Ray, ray_t: Interval, rec: &mut HitRecord<'a>) -> bool {
+        let denom = self.normal.dot(ray.direction);
+
+        if denom.abs() < 1e-8 {
+            return false;
+        }
+
+        let t = (self.d - self.normal.dot(ray.origin)) / denom;
+        if !ray_t.contains(t) {
+            return false;
+        }
+
+        let intersection = ray.at(t);
+        let planar_hitpt_vec = intersection - self.q;
+        let alpha = self.w.dot(planar_hitpt_vec.cross(self.v));
+        let beta = self.w.dot(self.u.cross(planar_hitpt_vec));
+
+        {
+            // Given the hit point in plane coordinates, return false if it is outside the
+            // primitive, otherwise set the hit record UV coordinates and return true.
+            if !Interval::UNIT.contains(alpha) || !Interval::UNIT.contains(beta) {
+                return false;
+            }
+        }
+
+        rec.t = t;
+        rec.u = alpha;
+        rec.v = beta;
+        rec.point = intersection;
+        rec.material = self.material;
+        rec.set_face_normal(ray, self.normal);
+
+        true
+    }
 }
