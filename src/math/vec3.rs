@@ -24,6 +24,8 @@ impl Vec3 {
     }
 
 
+    /// # Safety
+    /// The 4th element should be 0.0
     #[inline(always)]
     pub unsafe fn new_simd(simd: f32x4) -> Vec3 {
         debug_assert_eq!(simd[3], 0.0);

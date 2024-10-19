@@ -1,11 +1,15 @@
-use std::{ops::Mul, simd::{num::SimdFloat, StdFloat}};
+use std::{default, ops::Mul, simd::{num::SimdFloat, StdFloat}};
 
 use image::Rgb32FImage;
 
 use crate::{math::{interval::Interval, vec3::{Colour, Point}}, perlin_noise::PerlinNoise};
 
-#[derive(Clone, Copy)]
-pub enum Texture<'a> {
+#[derive(Clone, Copy, Default)]
+pub struct Texture<'a>(TextureKind<'a>);
+
+
+#[derive(Clone, Copy, Default)]
+pub enum TextureKind<'a> {
     SolidColour(Colour),
 
 
@@ -21,17 +25,24 @@ pub enum Texture<'a> {
     },
 
     
-    NoiseTexture(PerlinNoise<'a>, f32),
+    NoiseTexture{ 
+        noise: PerlinNoise<'a>,
+        scale: f32,
+    },
+
+
+    #[default]
+    NotFound,
 }
 
 
 impl<'a> Texture<'a> {
     pub fn value(&self, u: f32, v: f32, p: Point) -> Colour {
-        match self {
-            Texture::SolidColour(v) => *v,
+        match &self.0 {
+            TextureKind::SolidColour(v) => *v,
 
 
-            Texture::Checkerboard { inv_scale, even, odd } => {
+            TextureKind::Checkerboard { inv_scale, even, odd } => {
                 let xyz = (*inv_scale * p).axes.floor();
 
                 let is_even = xyz.reduce_sum() as i32 % 2 == 0;
@@ -40,7 +51,7 @@ impl<'a> Texture<'a> {
             },
 
 
-            Texture::Image { image  } => {
+            TextureKind::Image { image  } => {
                 // clamp input texture coordinates to 0..1 x 1..0
                 let u = Interval::new(0.0, 1.0).clamp(u);
                 let v = 1.0 - Interval::new(0.0, 1.0).clamp(v); // flip v to image coords
@@ -53,10 +64,37 @@ impl<'a> Texture<'a> {
             },
 
 
-            Texture::NoiseTexture(noise, scale) => {
+            TextureKind::NoiseTexture { noise, scale } => {
                 (1.0 + (scale * p[2] + 10.0 * noise.turbulance(p, 7)).sin()) * Colour::new(0.5, 0.5, 0.5)
             },
+
+            TextureKind::NotFound => Colour::ZERO,
         }
     }
+
+
+    fn new(kind: TextureKind) -> Texture {
+        Texture(kind)
+    }
+
+
+    pub fn colour(colour: Colour) -> Self {
+        Self::new(TextureKind::SolidColour(colour))
+    }
+
+    pub fn checkerboard(scale: f32, even: &'a Texture<'a>, odd: &'a Texture<'a>) -> Self {
+        Self::new(TextureKind::Checkerboard { inv_scale: 1.0/scale, even, odd })
+    }
+
+    pub fn image(image: &'a Rgb32FImage) -> Self {
+        Self::new(TextureKind::Image { image })
+    }
+
+    pub fn noise(noise: PerlinNoise<'a>, scale: f32) -> Self {
+        Self::new(TextureKind::NoiseTexture { noise, scale })
+    }
+
+
+
 
 }

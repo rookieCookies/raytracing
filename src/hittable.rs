@@ -1,8 +1,8 @@
-use std::{cmp::Ordering, f32::consts::PI, marker::PhantomData};
+use std::{cmp::Ordering, f32::{consts::PI, INFINITY, NEG_INFINITY}, marker::PhantomData, simd::{f32x4, num::SimdFloat}};
 
 use sti::arena::Arena;
 
-use crate::{material::Material, math::{aabb::{AABBx2, AABBx4, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}};
+use crate::{material::Material, math::{aabb::{AABBx2, AABBx4, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, texture::Texture};
 
 #[derive(Clone, Default)]
 pub struct HitRecord<'a> {
@@ -37,6 +37,7 @@ pub enum HittableKind<'a> {
     Sphere(Sphere<'a>),
     MovingSphere(MovingSphere<'a>),
     Quad(Quad<'a>),
+    ConstantMedium(ConstantMedium<'a>),
     BVH {
         /*
         aabbs: AABBx4,
@@ -46,6 +47,19 @@ pub enum HittableKind<'a> {
         left: &'a Hittable<'a>,
         right: Option<&'a Hittable<'a>>,
     },
+
+    Move {
+        obj: &'a Hittable<'a>,
+        offset: Vec3,
+    },
+
+    RotateY {
+        obj: &'a Hittable<'a>,
+        sin: f32,
+        cos: f32,
+    },
+
+    List(&'a [Hittable<'a>]),
 }
 
 
@@ -60,8 +74,35 @@ impl<'a> Hittable<'a> {
     }
 
 
+    pub fn constant_medium(constant_medium: ConstantMedium<'a>) -> Self {
+        Self { kind: HittableKind::ConstantMedium(constant_medium) }
+    }
+
+
     pub fn moving_sphere(sphere: MovingSphere<'a>) -> Self {
         Self { kind: HittableKind::MovingSphere(sphere) }
+    }
+
+
+    pub fn box_of_quads(arena: &'a Arena, a: Point, b: Point, mat: Material<'a>) -> Hittable<'a> {
+        let min = unsafe { Point::new_simd(a.axes.simd_min(b.axes)) };
+        let max = unsafe { Point::new_simd(a.axes.simd_max(b.axes)) };
+
+        let dx = Vec3::new(max[0] - min[0], 0.0, 0.0);
+        let dy = Vec3::new(0.0, max[1] - min[1], 0.0);
+        let dz = Vec3::new(0.0, 0.0, max[2] - min[2]);
+
+        let vertexes = arena.alloc_new([
+            Hittable::quad(Quad::new(Point::new( min[0],  min[1],  max[2]),  dx,  dy, mat)), // front
+            Hittable::quad(Quad::new(Point::new( max[0],  min[1],  max[2]), -dz,  dy, mat)), // right
+            Hittable::quad(Quad::new(Point::new( max[0],  min[1],  min[2]), -dx,  dy, mat)), // back
+            Hittable::quad(Quad::new(Point::new( min[0],  min[1],  min[2]),  dz,  dy, mat)), // left
+            Hittable::quad(Quad::new(Point::new( min[0],  max[1],  max[2]),  dx, -dz, mat)), // top
+            Hittable::quad(Quad::new(Point::new( min[0],  min[1],  min[2]),  dx,  dz, mat)), // bottom
+        ]);
+
+        let list = Hittable::bvh(arena, vertexes);
+        list
     }
 
 
@@ -99,9 +140,9 @@ impl<'a> Hittable<'a> {
             r2 = Some(arena.alloc_new(Hittable::bvh(arena, list.1)));
         }
 
-        Hittable {
+        let hittable = Hittable {
             kind: HittableKind::BVH {
-                aabbs: AABBx2::new(r1.calc_aabb(), r2.map(|x| x.calc_aabb()).unwrap_or(AABB::EMPTY)),
+                aabbs: AABBx2::new(r1.calc_aabb(), r2.map(|x| x.calc_aabb()).unwrap_or(AABB::empty())),
                 left: r1,
                 right: r2,
 
@@ -113,6 +154,16 @@ impl<'a> Hittable<'a> {
                         r4.map(Hittable::calc_aabb).unwrap_or(AABB::EMPTY))
                         */
             },
+        };
+
+        assert_eq!(hittable.calc_aabb(), aabb);
+        hittable
+    }
+
+
+    pub fn list(list: &'a [Hittable<'a>]) -> Hittable<'a> {
+        Hittable {
+            kind: HittableKind::List(list),
         }
     }
 
@@ -140,7 +191,81 @@ impl<'a> Hittable<'a> {
             },
 
 
-            HittableKind::BVH { aabbs, .. } => AABB::from_aabbs(&aabbs.aabb1(), &aabbs.aabb2()),
+            HittableKind::BVH { aabbs, right, left } => {
+                if right.is_some() {
+                    AABB::from_aabbs(&aabbs.aabb1(), &aabbs.aabb2())
+                } else {
+                    aabbs.aabb1()
+                }
+            },
+
+
+            HittableKind::ConstantMedium(constant_medium) => constant_medium.boundary.calc_aabb(),
+
+
+            HittableKind::Move { obj, offset } => obj.calc_aabb().offset(*offset),
+
+
+            HittableKind::RotateY { obj, sin, cos } => {
+                let mut min = Point::new(INFINITY, INFINITY, INFINITY);
+                let mut max = Point::new(NEG_INFINITY, NEG_INFINITY, NEG_INFINITY);
+                let bbox = obj.calc_aabb();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        for k in 0..2 {
+                            let i = i as f32;
+                            let j = j as f32;
+                            let k = k as f32;
+
+                            let x = i*bbox.x().max + (1.0 - i)*bbox.x().min;
+                            let y = j*bbox.y().max + (1.0 - j)*bbox.y().min;
+                            let z = k*bbox.z().max + (1.0 - k)*bbox.z().min;
+
+                            let newx =  cos*x + sin*z;
+                            let newz = -sin*x + cos*z;
+
+                            let tester = Vec3::new(newx, y, newz);
+                            for c in 0..3 {
+                                min[c] = min[c].min(tester[c]);
+                                max[c] = max[c].max(tester[c]);
+                            }
+                        }
+                    }
+                }
+
+                AABB::from_points(min, max)
+            },
+
+
+            HittableKind::List(hittables) => {
+                let mut aabb = AABB::new(Interval::EMPTY, Interval::EMPTY, Interval::EMPTY);
+                for l in hittables.iter() {
+                    aabb = AABB::from_aabbs(&aabb, &l.calc_aabb());
+                }
+                aabb
+            }
+
+
+        }
+    }
+
+
+    pub fn move_by(self, arena: &'a Arena, offset: Vec3) -> Hittable<'a> {
+        Hittable {
+            kind: HittableKind::Move { obj: arena.alloc_new(self), offset },
+        }
+    }
+
+
+    pub fn rotate_y_by(self, arena: &'a Arena, offset: f32) -> Hittable<'a> {
+        let rads = offset.to_radians();
+
+        let sin = rads.sin();
+        let cos = rads.cos();
+
+        Hittable {
+            kind: HittableKind::RotateY { obj: arena.alloc_new(self), sin, cos },
         }
     }
 }
@@ -274,6 +399,7 @@ impl<'a> Quad<'a> {
     }
 
 
+
     pub fn hit(&self, ray: &Ray, ray_t: Interval, rec: &mut HitRecord<'a>) -> bool {
         let denom = self.normal.dot(ray.direction);
 
@@ -309,3 +435,21 @@ impl<'a> Quad<'a> {
         true
     }
 }
+
+
+#[derive(Clone)]
+pub struct ConstantMedium<'a> {
+    pub phase_function : Material<'a>,
+    pub boundary: &'a Hittable<'a>,
+    pub neg_inv_density: f32,
+}
+
+impl<'a> ConstantMedium<'a> {
+    pub fn new(boundary: &'a Hittable<'a>, density: f32, texture: Texture<'a>) -> Self {
+        let phase_function = Material::isotropic(texture);
+        let neg_inv_density = -1.0 / density;
+        Self { phase_function, boundary, neg_inv_density }
+    }
+}
+
+
