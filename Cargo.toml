@@ -8,10 +8,10 @@ miri = []
 aabbx4 = []
 
 [dependencies]
-sti = { git = "https://github.com/leddoo/sti" }
-sdl2 = "*"
-image = "*"
-rayon = "*"
+sti = { git = "https://github.com/leddoo/sti", rev = "f5a03ee7" }
+sdl2 = "0.37.0"
+image = "0.25.4"
+rayon = "1.8.1"
 
 [profile.release]
 debug = 2

@@ -1,4 +1,4 @@
-use std::{default, ops::Mul, simd::{num::SimdFloat, StdFloat}};
+use std::simd::{num::SimdFloat, StdFloat};
 
 use image::Rgb32FImage;
 

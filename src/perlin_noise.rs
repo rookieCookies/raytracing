@@ -1,8 +1,8 @@
-use std::{ops::Sub, simd::{f32x4, StdFloat}};
+use std::simd::{f32x4, StdFloat};
 
 use sti::arena::Arena;
 
-use crate::{math::vec3::{Point, Vec3}, rng::{Seed}};
+use crate::{math::vec3::{Point, Vec3}, rng::Seed};
 
 #[derive(Clone, Copy)]
 pub struct PerlinNoise<'a> {

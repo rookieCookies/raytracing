@@ -1,8 +1,8 @@
-use std::{cmp::Ordering, f32::{consts::PI, INFINITY, NEG_INFINITY}, marker::PhantomData, simd::{f32x4, num::SimdFloat}};
+use std::{cmp::Ordering, f32::{consts::PI, INFINITY, NEG_INFINITY}, simd::num::SimdFloat};
 
 use sti::arena::Arena;
 
-use crate::{material::Material, math::{aabb::{AABBx2, AABBx4, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, texture::Texture};
+use crate::{material::Material, math::{aabb::{AABBx2, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, texture::Texture};
 
 #[derive(Clone, Default)]
 pub struct HitRecord<'a> {
@@ -191,7 +191,7 @@ impl<'a> Hittable<'a> {
             },
 
 
-            HittableKind::BVH { aabbs, right, left } => {
+            HittableKind::BVH { aabbs, right, .. } => {
                 if right.is_some() {
                     AABB::from_aabbs(&aabbs.aabb1(), &aabbs.aabb2())
                 } else {

@@ -1,10 +1,10 @@
-use std::{env, ptr::null, time::Instant};
+use std::{env, time::Instant};
 
-use image::{Rgba32FImage, RgbaImage};
-use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+use image::RgbaImage;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use raytracing_improved::{camera::Camera, hittable::{ConstantMedium, Hittable, MovingSphere, Quad, Sphere}, material::Material, math::{interval::Interval, vec3::{Colour, Point, Vec3}}, perlin_noise::PerlinNoise, rng::Seed, texture::Texture};
-use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::Rect, render::TextureAccess, sys::{quad_t, SDL_TouchDeviceType}};
-use sti::{arena::Arena, static_assert_eq};
+use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::Rect, render::TextureAccess};
+use sti::arena::Arena;
 
 const SENSITIVITY : f32 = 0.05;
 const CAMERA_SPEED : f32 = 50.0;

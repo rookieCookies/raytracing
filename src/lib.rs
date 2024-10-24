@@ -11,11 +11,3 @@ pub mod perlin_noise;
 pub mod utils;
 
 
-struct World {
-    image_dimensions: (usize, usize),
-    stage_1_buffer: Vec<Stage1>, // len == image.x * image.y
-}
-
-
-struct Stage1 {
-}

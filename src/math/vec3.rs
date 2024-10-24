@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub}, simd::{cmp::SimdPartialOrd, f32x4, num::SimdFloat, u32x4, StdFloat}};
+use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub}, simd::{cmp::SimdPartialOrd, f32x4, num::SimdFloat, StdFloat}};
 
 use crate::rng::Seed;
 

@@ -1,21 +1,15 @@
 use core::f32;
-use std::{f64::consts::E, simd::{cmp::{SimdPartialEq, SimdPartialOrd}, f32x4, num::{SimdFloat, SimdInt}}};
+use std::f64::consts::E;
 
-use crate::{hittable::{ConstantMedium, HitRecord, Hittable, HittableKind}, material::{self, Material}, rng::Seed, texture::Texture, utils::Stack};
+use crate::{hittable::{ConstantMedium, HitRecord, Hittable, HittableKind}, rng::Seed, utils::Stack};
 
-use super::{vec3::{Point, Vec3, Colour}, interval::Interval};
+use super::{vec3::{Point, Vec3}, interval::Interval};
 
 #[derive(Clone)]
 pub struct Ray {
     pub origin: Point,
     pub direction: Vec3,
     pub time: f32,
-}
-
-struct Frame {
-    ray: Ray,
-    depth: usize,
-    multiplier: Vec3,
 }
 
 

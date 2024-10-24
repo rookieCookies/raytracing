@@ -1,4 +1,4 @@
-use std::{mem::transmute, ops::MulAssign, simd::{cmp::SimdPartialOrd, f32x16, f32x4, f32x8, num::SimdFloat, u32x4, u8x4, Mask}};
+use std::simd::{f32x4, f32x8, num::SimdFloat};
 
 use super::{interval::Interval, ray::Ray, vec3::{Point, Vec3}};
 
@@ -13,15 +13,6 @@ pub struct AABB {
 pub struct AABBx2 {
     mins: f32x8,
     maxs: f32x8,
-}
-
-
-#[derive(Clone)]
-pub struct AABBx4 {
-    mins1: f32x8,
-    mins2: f32x8,
-    maxs1: f32x8,
-    maxs2: f32x8,
 }
 
 

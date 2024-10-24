@@ -1,11 +1,10 @@
 use core::f32;
-use std::{mem::transmute, ops::Div, simd::StdFloat};
+use std::simd::StdFloat;
 
 use rayon::iter::{ParallelBridge, ParallelIterator};
-//use sdl2::video::WindowPos;
 use sti::arena::Arena;
 
-use crate::{hittable::{HitRecord, Hittable, Sphere}, material::Material, math::{interval::Interval, ray::{Ray, Switch}, vec3::{Colour, Point, Vec3}}, rng::Seed, texture::Texture, utils::{SendPtr, Stack}, World};
+use crate::{hittable::{HitRecord, Hittable, Sphere}, material::Material, math::{ray::{Ray, Switch}, vec3::{Colour, Point, Vec3}}, rng::Seed, texture::Texture, utils::{SendPtr, Stack}};
 
 
 pub struct Camera<'a> {
@@ -344,13 +343,5 @@ impl RaytracingCamera {
         px * self.pixel_delta_u + py * self.pixel_delta_v
     }
 
-}
-
-
-
-/// Transforms a colour from linear space to gamma space
-#[inline(always)]
-fn linear_to_gamma(linear_comp: f32) -> f32 {
-    linear_comp.sqrt()
 }
 
