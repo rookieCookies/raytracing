@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub}, simd::{cmp::SimdPartialOrd, f32x4, num::SimdFloat}};
+use std::{fmt::Display, ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub}, simd::{cmp::SimdPartialOrd, f32x4, num::SimdFloat, u32x4, StdFloat}};
 
 use crate::rng::Seed;
 
@@ -251,14 +251,10 @@ impl IndexMut<usize> for Vec3 {
 
 impl Colour {
     pub fn to_rgba(mut self) -> u32 {
-        self.axes[0] = self[0].sqrt();
-        self.axes[1] = self[1].sqrt();
-        self.axes[2] = self[2].sqrt();
+        self.axes = self.axes.sqrt();
 
-        let r = (self[0] * 255.999) as u32;
-        let g = (self[1] * 255.999) as u32;
-        let b = (self[2] * 255.999) as u32;
-
-        (r << 0) | (g << 8) | (b << 16)
+        self.axes = self.axes * f32x4::splat(255.999);
+        let rgb0 = self.axes.cast::<u32>();
+        (rgb0[0] << 0) | (rgb0[1] << 8) | (rgb0[2] << 16)
     }
 }

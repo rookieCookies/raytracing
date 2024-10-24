@@ -260,7 +260,8 @@ impl RaytracingCamera {
                     unsafe { acc_ptr.write(colour) };
 
                     let colour = samples * colour;
-                    let mapped = Vec3::ONE.axes - (self.exposure * -colour).axes.exp();
+                    let mut mapped = Vec3::ONE.axes - (self.exposure * -colour).axes.exp();
+                    mapped[3] = 0.0;
                     let mapped = unsafe { Vec3::new_simd(mapped) };
                     unsafe { final_ptr.write(mapped.to_rgba()) };
 
