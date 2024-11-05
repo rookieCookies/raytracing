@@ -2,19 +2,19 @@ use std::{cmp::Ordering, f32::{consts::PI, INFINITY, NEG_INFINITY}, simd::num::S
 
 use sti::arena::Arena;
 
-use crate::{material::Material, math::{aabb::{AABBx2, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, texture::Texture};
+use crate::{material::{Material, MaterialId, MaterialMap}, math::{aabb::{AABBx2, AABB}, interval::Interval, ray::Ray, vec3::{Point, Vec3}}, texture::Texture};
 
 #[derive(Clone, Default)]
-pub struct HitRecord<'a> {
+pub struct HitRecord {
     pub point: Point,
     pub normal: Vec3,
     pub t: f32,
     pub front_face: bool,
-    pub material: Material<'a>,
+    pub material: MaterialId,
     pub u: f32,
     pub v: f32,
 }
-impl HitRecord<'_> {
+impl HitRecord {
     ///
     /// Sets the hit record normal vector
     /// `outward_normal` is assumed to have unit length
@@ -34,18 +34,14 @@ pub struct Hittable<'a> {
 
 #[derive(Clone)]
 pub enum HittableKind<'a> {
-    Sphere(Sphere<'a>),
-    MovingSphere(MovingSphere<'a>),
-    Quad(Quad<'a>),
+    Sphere(Sphere),
+    MovingSphere(MovingSphere),
+    Quad(Quad),
     ConstantMedium(ConstantMedium<'a>),
     BVH {
-        /*
-        aabbs: AABBx4,
-        regions: [Option<&'a Hittable<'a>>; 4],
-        */
-        aabbs: AABBx2,
+        aabbs: &'a AABBx2,
         left: &'a Hittable<'a>,
-        right: Option<&'a Hittable<'a>>,
+        right: &'a Hittable<'a>,
     },
 
     Move {
@@ -58,18 +54,16 @@ pub enum HittableKind<'a> {
         sin: f32,
         cos: f32,
     },
-
-    List(&'a [Hittable<'a>]),
 }
 
 
 impl<'a> Hittable<'a> {
-    pub fn sphere(sphere: Sphere<'a>) -> Self {
+    pub fn sphere(sphere: Sphere) -> Self {
         Self { kind: HittableKind::Sphere(sphere) }
     }
 
 
-    pub fn quad(quad: Quad<'a>) -> Self {
+    pub fn quad(quad: Quad) -> Self {
         Self { kind: HittableKind::Quad(quad) }
     }
 
@@ -79,12 +73,12 @@ impl<'a> Hittable<'a> {
     }
 
 
-    pub fn moving_sphere(sphere: MovingSphere<'a>) -> Self {
+    pub fn moving_sphere(sphere: MovingSphere) -> Self {
         Self { kind: HittableKind::MovingSphere(sphere) }
     }
 
 
-    pub fn box_of_quads(arena: &'a Arena, a: Point, b: Point, mat: Material<'a>) -> Hittable<'a> {
+    pub fn box_of_quads(arena: &'a Arena, a: Point, b: Point, mat: MaterialId) -> Hittable<'a> {
         let min = unsafe { Point::new_simd(a.axes.simd_min(b.axes)) };
         let max = unsafe { Point::new_simd(a.axes.simd_max(b.axes)) };
 
@@ -92,21 +86,21 @@ impl<'a> Hittable<'a> {
         let dy = Vec3::new(0.0, max[1] - min[1], 0.0);
         let dz = Vec3::new(0.0, 0.0, max[2] - min[2]);
 
-        let vertexes = arena.alloc_new([
+        let vertexes = [
             Hittable::quad(Quad::new(Point::new( min[0],  min[1],  max[2]),  dx,  dy, mat)), // front
             Hittable::quad(Quad::new(Point::new( max[0],  min[1],  max[2]), -dz,  dy, mat)), // right
             Hittable::quad(Quad::new(Point::new( max[0],  min[1],  min[2]), -dx,  dy, mat)), // back
             Hittable::quad(Quad::new(Point::new( min[0],  min[1],  min[2]),  dz,  dy, mat)), // left
             Hittable::quad(Quad::new(Point::new( min[0],  max[1],  max[2]),  dx, -dz, mat)), // top
             Hittable::quad(Quad::new(Point::new( min[0],  min[1],  min[2]),  dx,  dz, mat)), // bottom
-        ]);
+        ];
 
-        let list = Hittable::bvh(arena, vertexes);
+        let list = Hittable::bvh(arena, &vertexes);
         list
     }
 
 
-    pub fn bvh(arena: &'a Arena, hittables: &'a [Hittable<'a>]) -> Self {
+    pub fn bvh(arena: &'a Arena, hittables: &[Hittable<'a>]) -> Self {
         fn box_comp(a: &Hittable, b: &Hittable, axis: usize) -> bool {
             let a_axis_interval = a.calc_aabb().axis_interval(axis);
             let b_axis_interval = b.calc_aabb().axis_interval(axis);
@@ -124,13 +118,13 @@ impl<'a> Hittable<'a> {
         let r1;
         let r2;
         if hittables.len() == 1 {
-            r1 = &hittables[0];
+            r1 = arena.alloc_new(hittables[0].clone());
             r2 = None;
         } else if hittables.len() == 2 {
-            r1 = &hittables[0];
-            r2 = Some(&hittables[1]);
+            r1 = arena.alloc_new(hittables[0].clone());
+            r2 = Some(&*arena.alloc_new(hittables[1].clone()));
         } else {
-            let mut list = sti::vec::Vec::from_slice_in(arena, hittables);
+            let mut list = sti::vec::Vec::from_slice(hittables);
             list.sort_by(|a, b| if box_comp(a, b, axis) { Ordering::Less } else { Ordering::Greater });
 
             let middle = list.len() / 2;
@@ -142,9 +136,9 @@ impl<'a> Hittable<'a> {
 
         let hittable = Hittable {
             kind: HittableKind::BVH {
-                aabbs: AABBx2::new(r1.calc_aabb(), r2.map(|x| x.calc_aabb()).unwrap_or(AABB::empty())),
+                aabbs: arena.alloc_new(AABBx2::new(r1.calc_aabb(), r2.map(|x| x.calc_aabb()).unwrap_or(AABB::empty()))),
                 left: r1,
-                right: r2,
+                right: r2.unwrap_or(r1),
 
                 /*
                 regions: [Some(r1), r2, r3, r4],
@@ -158,13 +152,6 @@ impl<'a> Hittable<'a> {
 
         assert_eq!(hittable.calc_aabb(), aabb);
         hittable
-    }
-
-
-    pub fn list(list: &'a [Hittable<'a>]) -> Hittable<'a> {
-        Hittable {
-            kind: HittableKind::List(list),
-        }
     }
 
 
@@ -191,12 +178,8 @@ impl<'a> Hittable<'a> {
             },
 
 
-            HittableKind::BVH { aabbs, right, .. } => {
-                if right.is_some() {
-                    AABB::from_aabbs(&aabbs.aabb1(), &aabbs.aabb2())
-                } else {
-                    aabbs.aabb1()
-                }
+            HittableKind::BVH { aabbs, .. } => {
+                AABB::from_aabbs(&aabbs.aabb1(), &aabbs.aabb2())
             },
 
 
@@ -237,16 +220,6 @@ impl<'a> Hittable<'a> {
                 AABB::from_points(min, max)
             },
 
-
-            HittableKind::List(hittables) => {
-                let mut aabb = AABB::new(Interval::EMPTY, Interval::EMPTY, Interval::EMPTY);
-                for l in hittables.iter() {
-                    aabb = AABB::from_aabbs(&aabb, &l.calc_aabb());
-                }
-                aabb
-            }
-
-
         }
     }
 
@@ -268,24 +241,25 @@ impl<'a> Hittable<'a> {
             kind: HittableKind::RotateY { obj: arena.alloc_new(self), sin, cos },
         }
     }
+
 }
 
 
 #[derive(Clone)]
-pub struct Sphere<'a> {
+pub struct Sphere {
     centre: Point,
     radius: f32,
-    material: Material<'a>,
+    material: MaterialId,
 }
 
 
-impl<'a> Sphere<'a> {
-    pub fn new(centre: Point, radius: f32, material: Material<'a>) -> Self {
+impl Sphere {
+    pub fn new(centre: Point, radius: f32, material: MaterialId) -> Self {
         Self { centre, radius, material }
     }
 
 
-    pub fn hit(&self, ray: &Ray, t: Interval, rec: &mut HitRecord<'a>) -> bool {
+    pub fn hit(&self, ray: &Ray, t: Interval, rec: &mut HitRecord) -> bool {
         let oc = ray.origin - self.centre;
         let a = ray.direction.length_squared();
         let half_b = oc.dot(ray.direction);
@@ -317,22 +291,22 @@ impl<'a> Sphere<'a> {
 
 
 #[derive(Clone)]
-pub struct MovingSphere<'a> {
+pub struct MovingSphere {
     centre: Ray,
     radius: f32,
-    material: Material<'a>,
+    material: MaterialId,
 }
 
 
-impl<'a> MovingSphere<'a> {
-    pub fn new(centre_1: Point, centre_2: Point, radius: f32, material: Material<'a>) -> Self {
+impl MovingSphere {
+    pub fn new(centre_1: Point, centre_2: Point, radius: f32, material: MaterialId) -> Self {
         let centre = Ray::new(centre_1, centre_2 - centre_1, 0.0);
 
         Self { centre, radius, material }
     }
 
 
-    pub fn hit(&self, ray: &Ray, t: Interval, rec: &mut HitRecord<'a>) -> bool {
+    pub fn hit(&self, ray: &Ray, t: Interval, rec: &mut HitRecord) -> bool {
         let current_centre = self.centre.at(ray.time);
         let oc = ray.origin - current_centre;
         let a = ray.direction.length_squared();
@@ -379,43 +353,41 @@ fn get_sphere_uv(p: Point) -> (f32, f32) {
 
 
 #[derive(Clone)]
-pub struct Quad<'a> {
+pub struct Quad {
     q: Point,
     u: Vec3,
     v: Vec3,
-    w: Vec3,
-    normal: Vec3,
-    d: f32,
-    material: Material<'a>
+    n: Vec3,
+    material: MaterialId, 
 }
 
-impl<'a> Quad<'a> {
-    pub fn new(q: Point, u: Vec3, v: Vec3, material: Material<'a>) -> Self {
+impl Quad {
+    pub fn new(q: Point, u: Vec3, v: Vec3, material: MaterialId) -> Self {
         let n = u.cross(v);
-        let normal = n.unit();
-        let d = normal.dot(q);
-        let w = n / n.dot(n);
-        Self { q, u, v, normal, d, material, w }
+        Self { q, u, v, material, n }
     }
 
 
 
-    pub fn hit(&self, ray: &Ray, ray_t: Interval, rec: &mut HitRecord<'a>) -> bool {
-        let denom = self.normal.dot(ray.direction);
+    pub fn hit(&self, ray: &Ray, ray_t: Interval, rec: &mut HitRecord) -> bool {
+        let normal = self.n.unit();
+        let d = normal.dot(self.q);
+        let w = self.n / self.n.dot(self.n);
+        let denom = normal.dot(ray.direction);
 
         if denom.abs() < 1e-8 {
             return false;
         }
 
-        let t = (self.d - self.normal.dot(ray.origin)) / denom;
+        let t = (d - normal.dot(ray.origin)) / denom;
         if !ray_t.contains(t) {
             return false;
         }
 
         let intersection = ray.at(t);
         let planar_hitpt_vec = intersection - self.q;
-        let alpha = self.w.dot(planar_hitpt_vec.cross(self.v));
-        let beta = self.w.dot(self.u.cross(planar_hitpt_vec));
+        let alpha = w.dot(planar_hitpt_vec.cross(self.v));
+        let beta = w.dot(self.u.cross(planar_hitpt_vec));
 
         {
             // Given the hit point in plane coordinates, return false if it is outside the
@@ -430,7 +402,7 @@ impl<'a> Quad<'a> {
         rec.v = beta;
         rec.point = intersection;
         rec.material = self.material;
-        rec.set_face_normal(ray, self.normal);
+        rec.set_face_normal(ray, normal);
 
         true
     }
@@ -439,14 +411,14 @@ impl<'a> Quad<'a> {
 
 #[derive(Clone)]
 pub struct ConstantMedium<'a> {
-    pub phase_function : Material<'a>,
+    pub phase_function : MaterialId,
     pub boundary: &'a Hittable<'a>,
     pub neg_inv_density: f32,
 }
 
 impl<'a> ConstantMedium<'a> {
-    pub fn new(boundary: &'a Hittable<'a>, density: f32, texture: Texture<'a>) -> Self {
-        let phase_function = Material::isotropic(texture);
+    pub fn new(mmap: &mut MaterialMap<'a>, boundary: &'a Hittable<'a>, density: f32, texture: Texture<'a>) -> Self {
+        let phase_function = mmap.push(Material::isotropic(texture));
         let neg_inv_density = -1.0 / density;
         Self { phase_function, boundary, neg_inv_density }
     }

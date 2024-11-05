@@ -1,8 +1,8 @@
 use std::{env, time::Instant};
 
-use image::RgbaImage;
+use image::Rgba32FImage;
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use raytracing_improved::{camera::Camera, hittable::{ConstantMedium, Hittable, MovingSphere, Quad, Sphere}, material::Material, math::{interval::Interval, vec3::{Colour, Point, Vec3}}, perlin_noise::PerlinNoise, rng::Seed, texture::Texture};
+use raytracing_improved::{camera::Camera, hittable::{ConstantMedium, Hittable, MovingSphere, Quad, Sphere}, material::{Material, MaterialMap}, math::{interval::Interval, vec3::{Colour, Point, Vec3}}, perlin_noise::PerlinNoise, rng::Seed, texture::Texture, World};
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::Rect, render::TextureAccess};
 use sti::arena::Arena;
 
@@ -150,22 +150,37 @@ fn main() {
         }
     };
 
+
+    println!("{:?}", arena.stats());
+    println!("{:?}", arena.current_block_size());
+
     if cli_args.render_to_image {
-        for i in 1..cli_args.sample_count.unwrap_or(100) {
-            camera.render();
-            println!("sample {i}");
+        let sample_count = cli_args.sample_count.unwrap_or(100);
+        let total_time = Instant::now();
+        for i in 1..sample_count {
+
+            let time = Instant::now();
+            camera.empty_render();
+            let expected_total_time = (total_time.elapsed().as_secs_f32() / i as f32) * sample_count as f32;
+            let minus_elapsed = expected_total_time - total_time.elapsed().as_secs_f32().max(0.0);
+
+            println!("sample {i}/{} in {}ms, expected time: {}s",
+                     sample_count, time.elapsed().as_millis(), minus_elapsed,
+                 );
         }
 
+
         let res = camera.display_resolution();
-        let mut image = RgbaImage::new(res.0 as u32, res.1 as u32);
-        let buffer = camera.render();
+        let mut image = Rgba32FImage::new(res.0 as u32, res.1 as u32);
+        let buffer = camera.hdr_render();
 
         image.enumerate_pixels_mut().par_bridge()
-            .for_each(|(x, y, z)|
-               z.0 = ((buffer[(y*res.0 as u32 + x) as usize] << 8) + 255).to_be_bytes()
-            );
+            .for_each(|(x, y, z)| {
+                let buf = buffer[(y*res.0 as u32 + x) as usize];
+                z.0 = (buf[0], buf[1], buf[2], 1.0).into();
+            });
 
-        image.save("out.png").unwrap();
+        image.save("out.exr").unwrap();
 
         return;
     }
@@ -256,7 +271,7 @@ fn main() {
 
         let time = Instant::now();
 
-        let render = camera.render();
+        let render = camera.realtime_render();
         texture.update(None, unsafe { core::mem::transmute(render) }, camera.render_resolution().0 * size_of::<u32>()).unwrap();
 
 
@@ -275,11 +290,12 @@ fn main() {
 
 fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
     let mut seed = Seed([69, 420, 420, 69]);
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
     // ground
-    let mut boxes_ground = sti::vec::Vec::new_in(arena);
-    let ground = Material::lambertian(Texture::colour(Colour::new(0.48, 0.83, 0.53)));
+    let mut boxes_ground = sti::vec::Vec::new();
+    let ground = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.48, 0.83, 0.53))));
 
     let boxes_per_side = 20;
     for i in 0..boxes_per_side {
@@ -304,7 +320,7 @@ fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
     world.push(Hittable::bvh(arena, arena.alloc_new(boxes_ground)));
 
     // light
-    let light = Material::diffuse_light(Texture::colour(Colour::new(7.0, 7.0, 7.0)));
+    let light = mmap.push(Material::diffuse_light(Texture::colour(Colour::new(7.0, 7.0, 7.0))));
     let light = Quad::new(Point::new(123.0, 553.0, 147.0), Vec3::new(300.0, 0.0, 0.0),
                             Vec3::new(0.0, 0.0, 265.0), light);
     world.push(Hittable::quad(light));
@@ -313,33 +329,33 @@ fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
     // moving sphere
     let centre1 = Point::new(400.0, 400.0, 200.0);
     let centre2 = centre1 + Point::new(30.0, 0.0, 0.0);
-    let sphere_material = Material::lambertian(Texture::colour(Colour::new(0.7, 0.3, 0.1)));
+    let sphere_material = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.7, 0.3, 0.1))));
     world.push(Hittable::moving_sphere(MovingSphere::new(centre1, centre2, 50.0, sphere_material)));
 
     // other spheres
     world.push(Hittable::sphere(Sphere::new(Point::new(260.0, 150.0, 45.0), 50.0,
-                                Material::dielectric(Texture::colour(Colour::ONE), 1.5))));
+                                mmap.push(Material::dielectric(Texture::colour(Colour::ONE), 1.5)))));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 150.0, 145.0), 50.0,
-                                Material::metal(Texture::colour(Colour::new(0.8, 0.8, 0.9)), 1.0))));
+                                mmap.push(Material::metal(Texture::colour(Colour::new(0.8, 0.8, 0.9)), 1.0)))));
 
 
     // fog
     let boundary = Sphere::new(Point::new(360.0, 150.0, 145.0), 70.0,
-                                Material::dielectric(Texture::colour(Colour::ONE), 1.5));
+                                mmap.push(Material::dielectric(Texture::colour(Colour::ONE), 1.5)));
     let boundary = Hittable::sphere(boundary);
     world.push(boundary.clone());
 
-    let constant_medium = ConstantMedium::new(arena.alloc_new(boundary), 0.2,
+    let constant_medium = ConstantMedium::new(&mut mmap, arena.alloc_new(boundary), 0.2,
                                                 Texture::colour(Colour::new(0.2, 0.4, 0.9)));
     world.push(Hittable::constant_medium(constant_medium));
 
 
     let boundary = Sphere::new(Point::new(0.0, 0.0, 0.0), 5000.0,
-                                Material::dielectric(Texture::colour(Colour::ONE), 1.5));
+                                mmap.push(Material::dielectric(Texture::colour(Colour::ONE), 1.5)));
     let boundary = Hittable::sphere(boundary);
     world.push(boundary.clone());
 
-    let constant_medium = ConstantMedium::new(arena.alloc_new(boundary), 0.0001,
+    let constant_medium = ConstantMedium::new(&mut mmap, arena.alloc_new(boundary), 0.00005,
                                                 Texture::colour(Colour::ONE));
     world.push(Hittable::constant_medium(constant_medium));
 
@@ -350,20 +366,20 @@ fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
     let image = image.decode().unwrap().into_rgb32f();
     let image = arena.alloc_new(image);
 
-    let earth_material = Material::lambertian(Texture::image(image));
+    let earth_material = mmap.push(Material::lambertian(Texture::image(image)));
     world.push(Hittable::sphere(Sphere::new(Point::new(400.0, 200.0, 400.0), 100.0, earth_material)));
 
 
     // noise
     let perlin_noise = PerlinNoise::new(arena, &mut seed, 256);
-    let pertext = Material::lambertian(Texture::noise(perlin_noise, 0.2));
+    let pertext = mmap.push(Material::lambertian(Texture::noise(perlin_noise, 0.2)));
     let sphere = Sphere::new(Point::new(220.0, 280.0, 300.0), 80.0, pertext);
     world.push(Hittable::sphere(sphere));
 
 
     // stress balls
-    let mut stress_balls = sti::vec::Vec::new_in(arena);
-    let white = Material::lambertian(Texture::colour(Colour::ONE));
+    let mut stress_balls = sti::vec::Vec::new();
+    let white = mmap.push(Material::lambertian(Texture::colour(Colour::ONE)));
     let interval = Interval::new(0.0, 165.0);
     let ns = 1000;
 
@@ -386,7 +402,7 @@ fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                              opts.display_scale, opts.max_depth, 40.0,
                             Vec3::new(0.0, 1.0, 0.0), 0.0, 10.0, Colour::ZERO);
 
-    camera.set_world(Hittable::bvh(arena, arena.alloc_new(world)));
+    camera.set_world(World::new(arena.alloc_new(Hittable::bvh(arena, arena.alloc_new(world))), mmap));
     camera.change_pitch_yaw_by(0.0, 108.0);
 
 
@@ -395,12 +411,13 @@ fn the_final_scene<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
 
 
 fn cornell_box<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let red = Material::lambertian(Texture::colour(Colour::new(0.65, 0.05, 0.05)));
-    let white = Material::lambertian(Texture::colour(Colour::new(0.73, 0.73, 0.73)));
-    let green = Material::lambertian(Texture::colour(Colour::new(0.12, 0.45, 0.15)));
-    let light = Material::diffuse_light(Texture::colour(Colour::new(15.0, 15.0, 15.0)));
+    let red   = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.65, 0.05, 0.05))));
+    let white = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.73, 0.73, 0.73))));
+    let green = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.12, 0.45, 0.15))));
+    let light = mmap.push(Material::diffuse_light(Texture::colour(Colour::new(15.0, 15.0, 15.0))));
 
 
     world.push(Hittable::quad(Quad::new(Point::new(555.0, 0.0, 0.0), Vec3::new(0.0, 555.0, 0.0), Vec3::new(0.0, 0.0, 555.0), green)));
@@ -425,19 +442,20 @@ fn cornell_box<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
     camera.change_pitch_yaw_by(0.0, 90.0);
 
-    let world = Hittable::bvh(arena, world.leak());
-    camera.set_world(world);
+    let world = Hittable::bvh(arena, &world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }
 
 
 fn cornell_box_fog<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let red = Material::lambertian(Texture::colour(Colour::new(0.65, 0.05, 0.05)));
-    let white = Material::lambertian(Texture::colour(Colour::new(0.73, 0.73, 0.73)));
-    let green = Material::lambertian(Texture::colour(Colour::new(0.12, 0.45, 0.15)));
-    let light = Material::diffuse_light(Texture::colour(Colour::new(15.0, 15.0, 15.0)));
+    let red   = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.65, 0.05, 0.05))));
+    let white = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.73, 0.73, 0.73))));
+    let green = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.12, 0.45, 0.15))));
+    let light = mmap.push(Material::diffuse_light(Texture::colour(Colour::new(15.0, 15.0, 15.0))));
 
 
     world.push(Hittable::quad(Quad::new(Point::new(555.0, 0.0, 0.0), Vec3::new(0.0, 555.0, 0.0), Vec3::new(0.0, 0.0, 555.0), green)));
@@ -451,6 +469,7 @@ fn cornell_box_fog<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                .rotate_y_by(arena, 15.0)
                .move_by(arena, Vec3::new(265.0, 0.0, 295.0));
     let box1 = Hittable::constant_medium(ConstantMedium::new(
+                                            &mut mmap,
                                             arena.alloc_new(box1), 0.01,
                                             Texture::colour(Colour::ZERO)));
 
@@ -458,6 +477,7 @@ fn cornell_box_fog<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                .rotate_y_by(arena, -18.0)
                .move_by(arena, Vec3::new(130.0, 0.0, 65.0));
     let box2 = Hittable::constant_medium(ConstantMedium::new(
+                                            &mut mmap,
                                             arena.alloc_new(box2), 0.01,
                                             Texture::colour(Colour::ONE)));
 
@@ -470,20 +490,21 @@ fn cornell_box_fog<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
     camera.change_pitch_yaw_by(0.0, 90.0);
 
-    let world = Hittable::bvh(arena, world.leak());
-    camera.set_world(world);
+    let world = Hittable::bvh(arena, &world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }
 
 
 fn simple_light<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
     let pertext = Texture::noise(PerlinNoise::new(arena, &mut Seed([1, 2, 3, 4]), 100), 4.0);
-    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1000.0, 0.0), 1000.0, Material::lambertian(pertext))));
-    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 2.0, 0.0), 2.0, Material::lambertian(pertext))));
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1000.0, 0.0), 1000.0, mmap.push(Material::lambertian(pertext)))));
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 2.0, 0.0), 2.0, mmap.push(Material::lambertian(pertext)))));
 
-    let diff_light = Material::diffuse_light(Texture::colour(Colour::new(4.0, 4.0, 4.0)));
+    let diff_light = mmap.push(Material::diffuse_light(Texture::colour(Colour::new(4.0, 4.0, 4.0))));
     world.push(Hittable::quad(Quad::new(Point::new(3.0, 1.0, -2.0), Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 2.0, 0.0), diff_light)));
 
 
@@ -491,23 +512,24 @@ fn simple_light<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
                              ((16.0 * opts.resolution_scale) as usize, (9.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 20.0,
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::ZERO);
-    camera.change_pitch_yaw_by(0.0, -90.0);
+    camera.change_pitch_yaw_by(0.0, 200.0);
 
-    let world = Hittable::bvh(arena, world.leak());
-    camera.set_world(world);
+    let world = Hittable::bvh(arena, &world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }
 
 
 fn quads<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let left_red = Material::lambertian(Texture::colour(Colour::new(1.0, 0.2, 0.2)));
-    let back_green = Material::diffuse_light(Texture::colour(Colour::new(0.2, 1.0, 0.2)));
-    let right_blue = Material::lambertian(Texture::colour(Colour::new(0.2, 0.2, 1.0)));
-    let upper_orange = Material::lambertian(Texture::colour(Colour::new(1.0, 0.5, 0.0)));
-    let lower_teal = Material::lambertian(Texture::colour(Colour::new(0.2, 0.8, 0.8)));
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    
-    let mut world = sti::vec::Vec::new_in(arena);
+
+    let left_red     = mmap.push(Material::lambertian(Texture::colour(Colour::new(1.0, 0.2, 0.2))));
+    let back_green   = mmap.push(Material::diffuse_light(Texture::colour(10.0 * Colour::new(0.2, 1.0, 0.2))));
+    let right_blue   = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.2, 0.2, 1.0))));
+    let upper_orange = mmap.push(Material::lambertian(Texture::colour(Colour::new(1.0, 0.5, 0.0))));
+    let lower_teal   = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.2, 0.8, 0.8))));
 
     world.push(Hittable::quad(Quad::new(Point::new(-3.0, -2.0, 5.0), Point::new( 0.0, 0.0, -4.0), Point::new(0.0, 4.0,  0.0), left_red)));
     world.push(Hittable::quad(Quad::new(Point::new(-2.0, -2.0, 0.0), Point::new( 4.0, 0.0,  0.0), Point::new(0.0, 4.0,  0.0), back_green)));
@@ -519,19 +541,22 @@ fn quads<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
     let mut camera = Camera::new(&arena, Point::new(0.0, 0.0, 9.0), Vec3::new(1.0, 0.0, 0.0),
                              ((10.0 * opts.resolution_scale) as usize, (10.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 80.0,
-                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.1, 0.1, 0.1));
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.0, 0.0, 0.0));
     camera.change_pitch_yaw_by(0.0, -90.0);
 
-    let world = Hittable::bvh(arena, world.leak());
-    camera.set_world(world);
+    let world = Hittable::bvh(arena, &world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }
 
 
 fn original_bouncing_spheres<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let material_ground = Material::lambertian(Texture::checkerboard(0.64, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE))));
+    let material_ground = mmap.push(Material::lambertian(Texture::checkerboard(0.64,
+                                                                     arena.alloc_new(Texture::colour(Colour::ZERO)), 
+                                                                     arena.alloc_new(Texture::colour(Colour::ONE)))));
 
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1000.0, 0.0), 1000.0, material_ground)));
 
@@ -558,37 +583,40 @@ fn original_bouncing_spheres<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<
                 mat = Material::dielectric(Texture::colour(Colour::ONE), 1.5)
             }
 
+            let mat = mmap.push(mat);
+
             let hittable = Hittable::moving_sphere(MovingSphere::new(centre, centre_2, 0.2, mat));
             world.push(hittable);
         }
     }
 
-    let mat = Material::dielectric(Texture::colour(Colour::new(1.0, 1.0, 1.0)), 1.5);
+    let mat = mmap.push(Material::dielectric(Texture::colour(Colour::new(1.0, 1.0, 1.0)), 1.5));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 1.0, 0.0), 1.0, mat)));
 
-    let mat = Material::lambertian(Texture::colour(Colour::new(0.4, 0.2, 0.1)));
+    let mat = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.4, 0.2, 0.1))));
     world.push(Hittable::sphere(Sphere::new(Point::new(-4.0, 1.0, 0.0), 1.0, mat)));
 
-    let mat = Material::metal(Texture::colour(Colour::new(0.7, 0.6, 0.5)), 0.0);
+    let mat = mmap.push(Material::metal(Texture::colour(Colour::new(0.7, 0.6, 0.5)), 0.0));
     world.push(Hittable::sphere(Sphere::new(Point::new(4.0, 1.0, 0.0), 1.0, mat)));
 
-    let world = Hittable::bvh(arena, world.leak());
+    let world = Hittable::bvh(arena, &world);
     let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
                              ((16.0 * opts.resolution_scale) as usize, (9.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 20.0,
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.7, 0.7, 0.7));
 
 
-    camera.set_world(world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera.change_pitch_yaw_by(-15.0, 45.0);
     camera
 }
 
 
 fn bouncing_spheres_night<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let material_ground = Material::lambertian(Texture::checkerboard(0.64, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE))));
+    let material_ground = mmap.push(Material::lambertian(Texture::checkerboard(0.64, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE)))));
 
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1000.0, 0.0), 1000.0, material_ground)));
 
@@ -619,12 +647,14 @@ fn bouncing_spheres_night<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a>
                 mat = Material::dielectric(Texture::colour(Colour::ONE), 1.5)
             }
 
+            let mat = mmap.push(mat);
+
             let mut hittable = Hittable::moving_sphere(MovingSphere::new(centre, centre_2, 0.2, mat));
 
             if seed.next_f32() < 0.125 {
                 let noise = PerlinNoise::new(arena, &mut seed, 64);
                 let texture = Texture::noise(noise, seed.next_f32()*2.0);
-                let medium = ConstantMedium::new(arena.alloc_new(hittable), seed.next_f32(), texture);
+                let medium = ConstantMedium::new(&mut mmap, arena.alloc_new(hittable), seed.next_f32(), texture);
                 hittable = Hittable::constant_medium(medium)
             }
 
@@ -632,63 +662,70 @@ fn bouncing_spheres_night<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a>
         }
     }
 
-    let mat = Material::dielectric(Texture::colour(Colour::new(1.0, 1.0, 1.0)), 1.5);
+    let mat = mmap.push(Material::dielectric(Texture::colour(Colour::new(1.0, 1.0, 1.0)), 1.5));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 1.0, 0.0), 1.0, mat)));
 
-    let mat = Material::lambertian(Texture::colour(Colour::new(0.4, 0.2, 0.1)));
+    let mat = mmap.push(Material::lambertian(Texture::colour(Colour::new(0.4, 0.2, 0.1))));
     world.push(Hittable::sphere(Sphere::new(Point::new(-4.0, 1.0, 0.0), 1.0, mat)));
 
-    let mat = Material::metal(Texture::colour(Colour::new(0.7, 0.6, 0.5)), 0.0);
+    let mat = mmap.push(Material::metal(Texture::colour(Colour::new(0.7, 0.6, 0.5)), 0.0));
     world.push(Hittable::sphere(Sphere::new(Point::new(4.0, 1.0, 0.0), 1.0, mat)).move_by(arena, Vec3::ONE));
 
-    let world = Hittable::bvh(arena, world.leak());
+    let world = Hittable::bvh(arena, &world);
 
     let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
                              ((16.0 * opts.resolution_scale) as usize, (9.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 20.0,
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.0, 0.0, 0.0));
 
-    camera.set_world(world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera.change_pitch_yaw_by(-15.0, 45.0);
     camera
 }
 
 
 fn world_sphere<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let mut image = image::ImageReader::open("earthmap.jpg").unwrap();
+    let mut image = image::ImageReader::open("earthmap3.png").unwrap();
     image.no_limits();
     let image = image.decode().unwrap().into_rgb32f();
     let image = arena.alloc_new(image);
-    let material_ground = Material::diffuse_light(Texture::image(image));
+    let material_ground = mmap.push(Material::diffuse_light(Texture::image(image)));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 0.0, 0.0), 2.0, material_ground)));
 
-    let world = Hittable::bvh(&arena, world.leak());
+    let material_ground = mmap.push(Material::lambertian(Texture::checkerboard(1.0, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE)))));
+    world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -1002.0, 0.0), 1000.0, material_ground)));
+
+    let world = Hittable::bvh(&arena, &world);
 
     let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
                              ((16.0 * opts.resolution_scale) as usize, (10.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 20.0,
-                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.7, 0.7, 0.7));
+                             Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.98431373, 0.56470588, 0.38431373));
 
-    camera.set_world(world);
+    camera.change_pitch_yaw_by(-20.0, 40.0);
+
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }
 
 
 fn checkered_spheres<'a>(arena: &'a Arena, opts: &CliOptions) -> Camera<'a> {
-    let mut world = sti::vec::Vec::new_in(arena);
+    let mut world = sti::vec::Vec::new();
+    let mut mmap = MaterialMap::new();
 
-    let material_ground = Material::lambertian(Texture::checkerboard(1.0, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE))));
+    let material_ground = mmap.push(Material::lambertian(Texture::checkerboard(1.0, arena.alloc_new(Texture::colour(Colour::ZERO)), arena.alloc_new(Texture::colour(Colour::ONE)))));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, -10.0, 0.0), 10.0, material_ground)));
     world.push(Hittable::sphere(Sphere::new(Point::new(0.0, 10.0, 0.0), 10.0, material_ground)));
 
-    let world = Hittable::bvh(&arena, world.leak());
-    let mut camera = Camera::new(&arena, Point::new(-10.0, 5.0, -10.0), Vec3::new(1.0, 0.0, 0.0),
+    let world = Hittable::bvh(&arena, &world);
+    let mut camera = Camera::new(&arena, Point::new(-25.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0),
                              ((16.0 * opts.resolution_scale) as usize, (10.0 * opts.resolution_scale) as usize),
                              opts.display_scale, opts.max_depth, 20.0,
                              Vec3::new(0.0, 2.0, 0.0), 0.0, 10.0, Colour::new(0.7, 0.7, 0.7));
 
-    camera.set_world(world);
+    camera.set_world(World::new(arena.alloc_new(world), mmap));
     camera
 }

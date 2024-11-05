@@ -59,6 +59,7 @@ impl AABB {
 
 
     pub fn from_aabbs(box1: &AABB, box2: &AABB) -> AABB {
+        if box2 == &AABB::empty() { return box1.clone() }
         Self::new(
             Interval::from_intervals(box1.x(), box2.x()),
             Interval::from_intervals(box1.y(), box2.y()),
@@ -147,7 +148,8 @@ impl AABBx2 {
             let min = t1.simd_min(t2).reduce_max();
             let max = t1.simd_max(t2).reduce_min();
 
-            (Interval::new(min, max), min <= max)
+            let hit = min <= max;
+            (Interval::new(min, max), hit)
         };
 
         let right = {
@@ -157,7 +159,8 @@ impl AABBx2 {
             let min = t1.simd_min(t2).reduce_max();
             let max = t1.simd_max(t2).reduce_min();
 
-            (Interval::new(min, max), min <= max)
+            let hit = min <= max;
+            (Interval::new(min, max), hit)
         };
 
         [left, right]

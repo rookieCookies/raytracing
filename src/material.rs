@@ -1,3 +1,5 @@
+use sti::{define_key, keyed::KVec};
+
 use crate::{hittable::HitRecord, math::{ray::Ray, vec3::{Colour, Point, Vec3}}, rng::Seed};
 
 use super::texture::Texture;
@@ -23,6 +25,39 @@ pub enum MaterialKind {
 
     #[default]
     NotFound,
+}
+
+
+define_key!(u32, pub MaterialId);
+
+
+pub struct MaterialMap<'a> {
+    map: KVec<MaterialId, Material<'a>>,
+}
+
+
+impl<'a> MaterialMap<'a> {
+    pub fn new() -> Self {
+        let mut map = KVec::new();
+        map.push(Material::new(Texture::colour(Colour::ZERO), MaterialKind::Lambertian));
+        Self { map }
+    }
+
+
+    pub fn push(&mut self, mat: Material<'a>) -> MaterialId { self.map.push(mat) }
+    pub fn get(&self, mat: MaterialId) -> &Material<'a> { self.map.get(mat).unwrap() }
+}
+
+
+impl MaterialId {
+    pub const DEFAULT : MaterialId = MaterialId(0);
+}
+
+
+impl Default for MaterialId {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 

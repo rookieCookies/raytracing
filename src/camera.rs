@@ -4,7 +4,7 @@ use std::simd::StdFloat;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use sti::arena::Arena;
 
-use crate::{hittable::{HitRecord, Hittable, Sphere}, material::Material, math::{ray::{Ray, Switch}, vec3::{Colour, Point, Vec3}}, rng::Seed, texture::Texture, utils::{SendPtr, Stack}};
+use crate::{hittable::{HitRecord, Hittable, Sphere}, material::{MaterialId, MaterialMap}, math::{ray::{Modification, Ray, Switch}, vec3::{Colour, Point, Vec3}}, rng::Seed, utils::SendPtr, World};
 
 
 pub struct Camera<'a> {
@@ -25,7 +25,7 @@ pub struct Camera<'a> {
     acc_colours: Vec<Colour>, 
     final_colours: Vec<u32>, // 0RGB
     samples: usize,
-    world: &'a mut Hittable<'a>,
+    world: World<'a>,
 
     background_colour: Colour,
     exposure: f32,
@@ -37,7 +37,7 @@ impl<'a> Camera<'a> {
                (width, height): (usize, usize), display_scale: f32,
                max_depth: usize, vfov: f32,  vup: Vec3, defocus_angle: f32,
                focus_dist: f32, background_colour: Colour) -> Self {
-        let rc = RaytracingCamera::new(width, height, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist, background_colour, 1.0);
+        let rc = RaytracingCamera::new(width, height, max_depth, vfov, position, position + direction, vup, defocus_angle, focus_dist, background_colour);
         Self {
             position,
             direction,
@@ -50,8 +50,11 @@ impl<'a> Camera<'a> {
             pitch: 0.0,
             yaw: 0.0,
             samples: 0,
-            world: arena.alloc_new(Hittable::sphere(Sphere::new(Point::ZERO, 1.0,
-                                                                Material::lambertian(Texture::colour(Colour::ZERO))))),
+            world: World::new(
+                arena.alloc_new(Hittable::sphere(Sphere::new(Point::ZERO, 1.0, MaterialId::DEFAULT))),
+                MaterialMap::new()
+            ),
+                                                                
             display_scale,
             render_resolution: (width, height),
             background_colour,
@@ -68,17 +71,54 @@ impl<'a> Camera<'a> {
 
 
 
-    pub fn set_world(&mut self, world: Hittable<'a>) {
+    pub fn set_world(&mut self, world: World<'a>) {
         self.samples = 0;
-        *self.world = world;
+        self.world = world;
     }
 
 
-    pub fn render(&mut self) -> &[u32] {
+    pub fn empty_render(&mut self) { 
         self.update_raytracing_camera();
         self.samples += 1;
-        self.rt_cam.render(self.world, self.samples, &mut self.acc_colours, &mut self.final_colours);
+        self.rt_cam.render(&self.world, self.samples, &mut self.acc_colours, 
+        |(_, _), _| {});
+    }
+
+
+
+    pub fn realtime_render(&mut self) -> &[u32] {
+        self.update_raytracing_camera();
+        self.samples += 1;
+        let final_ptr = SendPtr(self.final_colours.as_mut_ptr());
+        let width = self.rt_cam.image_dimensions.0;
+        self.rt_cam.render(&self.world, self.samples, &mut self.acc_colours, 
+        |(x, y), colour| {
+            let mut mapped = Vec3::ONE.axes - (self.exposure * -colour).axes.exp();
+            mapped[3] = 0.0;
+            let mapped = unsafe { Vec3::new_simd(mapped) };
+            let final_ptr = final_ptr.clone().0;
+            unsafe { final_ptr.add(y*width + x).write(mapped.to_rgba()) };
+        });
+
         &self.final_colours
+    }
+
+
+    pub fn hdr_render(&mut self) -> Box<[Vec3]> {
+        self.update_raytracing_camera();
+        self.samples += 1;
+        let (width, height) = self.rt_cam.image_dimensions;
+        let mut buffer = Vec::new();
+        buffer.resize(height * width, Vec3::ZERO);
+        let final_ptr = SendPtr(buffer.as_mut_ptr());
+        self.rt_cam.render(&self.world, self.samples, &mut self.acc_colours, 
+        |(x, y), colour| {
+            let mapped = colour.axes.sqrt();
+            let final_ptr = final_ptr.clone().0;
+            unsafe { final_ptr.add(y*width + x).write(Vec3::new_simd(mapped)) };
+        });
+
+        buffer.into()
     }
 
 
@@ -100,8 +140,7 @@ impl<'a> Camera<'a> {
         let render = RaytracingCamera::new(self.rt_cam.image_dimensions.0, self.rt_cam.image_dimensions.1,
                                        self.rt_cam.max_depth,
                                        self.vfov, self.position, self.position + direction,
-                                       self.vup, self.rt_cam.defocus_angle, self.focus_dist, self.background_colour,
-                                       self.exposure);
+                                       self.vup, self.rt_cam.defocus_angle, self.focus_dist, self.background_colour);
         self.rt_cam = render;
     }
 
@@ -176,15 +215,13 @@ struct RaytracingCamera {
     defocus_disk_u: Vec3,
     defocus_disk_v: Vec3,
     background_colour: Colour,
-    exposure: f32,
 }
 
 
 impl RaytracingCamera {
     pub fn new(width: usize, height: usize,
                max_depth: usize, vfov: f32, look_from: Vec3, look_at: Vec3,
-               vup: Vec3, defocus_angle: f32, focus_dist: f32, background_colour: Colour,
-               exposure: f32) -> Self {
+               vup: Vec3, defocus_angle: f32, focus_dist: f32, background_colour: Colour) -> Self {
         let centre = look_from;
 
         // Determine viewport dimensions
@@ -225,19 +262,19 @@ impl RaytracingCamera {
             defocus_disk_u,
             defocus_disk_v,
             background_colour,
-            exposure,
         }
     }
 
 
-    fn render<'a, 'b>(&self, world: &'a Hittable<'a>,
-                  n_samples: usize, acc_colours: &'b mut [Colour], final_colours: &'b mut [u32]) {
-        assert_eq!(final_colours.len(), self.image_dimensions.0 * self.image_dimensions.1);
+    fn render<'a, 'b>(&self, world: &World<'a>,
+                  n_samples: usize, acc_colours: &'b mut [Colour],
+                  renderer: impl Fn((usize, usize), Colour) + Send + Sync) {
+        //assert_eq!(final_colours.len(), self.image_dimensions.0 * self.image_dimensions.1);
         assert_eq!(acc_colours.len(), self.image_dimensions.0 * self.image_dimensions.1);
 
         let acc_len = acc_colours.len();
         let acc_ptr = SendPtr(acc_colours.as_mut_ptr());
-        let final_ptr = SendPtr(final_colours.as_mut_ptr());
+        //let final_ptr = SendPtr(final_colours.as_mut_ptr());
 
         let samples = 1.0 / n_samples as f32;
 
@@ -245,27 +282,23 @@ impl RaytracingCamera {
         (0..self.image_dimensions.1)
             .par_bridge()
             .for_each(move |y| {
-                let mut hittable_stack = Stack::new();
+                let mut hittable_stack = Vec::new();
+                let mut modification_stack = Vec::new();
                 let mut seed = Seed([y as u64, n_samples as u64, acc_len as u64, y as u64]);
 
                 let mut acc_ptr = unsafe { acc_ptr.clone().0.offset((y*self.image_dimensions.0) as isize) };
-                let mut final_ptr = unsafe { final_ptr.clone().0.offset((y*self.image_dimensions.0) as isize) };
 
                 for x in 0..self.image_dimensions.0 {
                     let ray = self.get_ray(&mut seed, x, y);
-                    let colour = self.ray_colour(&mut seed, ray, world, &mut hittable_stack);
+                    let colour = self.ray_colour(&mut seed, ray, world, &mut hittable_stack, &mut modification_stack);
 
                     let colour = unsafe { acc_ptr.read() + colour };
                     unsafe { acc_ptr.write(colour) };
 
                     let colour = samples * colour;
-                    let mut mapped = Vec3::ONE.axes - (self.exposure * -colour).axes.exp();
-                    mapped[3] = 0.0;
-                    let mapped = unsafe { Vec3::new_simd(mapped) };
-                    unsafe { final_ptr.write(mapped.to_rgba()) };
+                    renderer((x, y), colour);
 
                     acc_ptr = unsafe { acc_ptr.add(1) };
-                    final_ptr = unsafe { final_ptr.add(1) };
                 }
 
             });
@@ -287,8 +320,10 @@ impl RaytracingCamera {
     }
 
 
-    fn ray_colour<'a>(&self, seed: &mut Seed, ray: Ray,
-                  world: &'a Hittable<'a>, hittable_stack: &mut Stack<Switch<'a>>) -> Colour {
+    #[inline(never)]
+    fn ray_colour<'a>(&self, seed: &mut Seed, ray: Ray, 
+                  world: &World<'a>, hittable_stack: &mut Vec<Switch<'a>>,
+                  modification_stack: &mut Vec<Modification<'a>>) -> Colour {
 
         struct Frame {
             ray: Ray,
@@ -306,7 +341,7 @@ impl RaytracingCamera {
 
             if depth == 0 { return Colour::ZERO }
 
-            let hit_anything = ray.hit_anything(seed, &mut rec, world, hittable_stack);
+            let hit_anything = ray.hit_anything(seed, &mut rec, world, hittable_stack, modification_stack);
 
             // If the ray hits nothing, return the skybox
             if !hit_anything {
@@ -314,8 +349,9 @@ impl RaytracingCamera {
             }
 
 
-            let colour_from_emission = rec.material.emitted(rec.u, rec.v, rec.point);
-            let Some((scattered, attenuation)) = rec.material.scatter(seed, &ray, &rec)
+            let material = world.material_map.get(rec.material);
+            let colour_from_emission = material.emitted(rec.u, rec.v, rec.point);
+            let Some((scattered, attenuation)) = material.scatter(seed, &ray, &rec)
             else { return multiplier * colour_from_emission };
 
             let frame = Frame {

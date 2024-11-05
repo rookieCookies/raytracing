@@ -1,7 +1,7 @@
 use core::f32;
 use std::f64::consts::E;
 
-use crate::{hittable::{ConstantMedium, HitRecord, Hittable, HittableKind}, rng::Seed, utils::Stack};
+use crate::{hittable::{ConstantMedium, HitRecord, Hittable, HittableKind}, rng::Seed, World};
 
 use super::{vec3::{Point, Vec3}, interval::Interval};
 
@@ -14,6 +14,12 @@ pub struct Ray {
 
 
 pub enum Switch<'a> {
+    Modification,
+    Hittable(&'a Hittable<'a>),
+}
+
+
+pub enum Modification<'a> {
     RayMove((Vec3, bool)),
     RayRotateY {
         original_ray: Ray,
@@ -23,20 +29,20 @@ pub enum Switch<'a> {
     },
     ConstantMediumPhase1 {
         hit_anything_prev: bool,
-        original_rec: HitRecord<'a>,
+        original_rec: HitRecord,
         original_t: Interval,
         medium: &'a ConstantMedium<'a>,
 
     },
     ConstantMediumPhase2 {
         hit_anything_prev: bool,
-        original_rec: HitRecord<'a>,
+        original_rec: HitRecord,
         original_t: Interval,
-        rec_1: HitRecord<'a>,
+        rec_1: HitRecord,
         medium: &'a ConstantMedium<'a>,
     },
-    Hittable(&'a Hittable<'a>),
 }
+
 
 
 impl Ray {
@@ -49,105 +55,113 @@ impl Ray {
     pub fn at(&self, t: f32) -> Point { self.origin + t*self.direction }
 
 
-    pub fn hit_anything<'a>(&self, seed: &mut Seed, rec: &mut HitRecord<'a>,
-                        world: &'a Hittable<'a>, hittable_stack: &mut Stack<Switch<'a>>) -> bool {
+    #[inline(never)]
+    pub fn hit_anything<'a>(&self, seed: &mut Seed, rec: &mut HitRecord,
+                        world: &World<'a>, hittable_stack: &mut Vec<Switch<'a>>,
+                        modification_stack: &mut Vec<Modification<'a>>) -> bool {
 
         let mut hit_anything = false;
         let mut tmin = 0.001;
         let mut tmax = f32::INFINITY;
         let mut ray = self.clone();
 
-        hittable_stack.push(Switch::Hittable(world));
+        hittable_stack.push(Switch::Hittable(world.entry));
 
         while let Some(hittable) = hittable_stack.pop() {
             let hittable = match hittable {
-                Switch::RayMove((vec3, hit)) => {
-                    ray.origin = ray.origin + vec3;
-                    if hit_anything {
-                        rec.point += vec3;
-                    }
+                Switch::Modification => {
+                    let modification = modification_stack.pop().unwrap();
+                    match modification {
+                        Modification::RayMove((vec3, hit)) => {
+                            ray.origin = ray.origin + vec3;
+                            if hit_anything {
+                                rec.point += vec3;
+                            }
 
-                    hit_anything = hit_anything || hit;
+                            hit_anything = hit_anything || hit;
 
-                    continue;
-                },
+                            continue;
+                        },
 
-                Switch::RayRotateY { original_ray, hit_anything_prev, sin, cos } => {
-                    ray = original_ray;
+                        Modification::RayRotateY { original_ray, hit_anything_prev, sin, cos } => {
+                            ray = original_ray.clone();
 
-                    if hit_anything {
-                        rec.point = Point::new(
-                            (cos * rec.point[0]) + (sin * rec.point[2]),
-                            rec.point[1],
-                            (-sin * rec.point[0]) + (cos * rec.point[2]),
-                        );
+                            if hit_anything {
+                                rec.point = Point::new(
+                                    (cos * rec.point[0]) + (sin * rec.point[2]),
+                                    rec.point[1],
+                                    (-sin * rec.point[0]) + (cos * rec.point[2]),
+                                );
 
-                        rec.normal = Vec3::new(
-                            (cos * rec.normal[0]) + (sin * rec.normal[2]),
-                            rec.normal[1],
-                            (-sin * rec.normal[0]) + (cos * rec.normal[2]),
-                        );
-                    }
+                                rec.normal = Vec3::new(
+                                    (cos * rec.normal[0]) + (sin * rec.normal[2]),
+                                    rec.normal[1],
+                                    (-sin * rec.normal[0]) + (cos * rec.normal[2]),
+                                );
+                            }
 
-                    hit_anything = hit_anything || hit_anything_prev;
-                    continue;
-                },
-
-
-                Switch::ConstantMediumPhase1 { original_rec, original_t, medium, hit_anything_prev } => {
-                    if !hit_anything {
-                        hit_anything = hit_anything_prev;
-                        *rec = original_rec;
-                        tmin = original_t.min;
-                        tmax = original_t.max;
-                        continue;
-                    }
-
-                    hittable_stack.push(Switch::ConstantMediumPhase2 {
-                        original_rec, original_t, rec_1: rec.clone(), medium,
-                        hit_anything_prev, });
-                    hittable_stack.push(Switch::Hittable(medium.boundary));
-
-                    tmin = 0.0001 + rec.t;
-                    tmax = Interval::UNIVERSE.max;
-                    *rec = HitRecord::default();
-                    hit_anything = false;
-                    continue;
-                },
+                            hit_anything = hit_anything || hit_anything_prev;
+                            continue;
+                        },
 
 
-                Switch::ConstantMediumPhase2 { original_rec, original_t, mut rec_1, medium, hit_anything_prev } => {
-                    let mut rec_2 = core::mem::replace(rec, original_rec);
-                    tmin = original_t.min;
-                    tmax = original_t.max;
-                    if !hit_anything {
-                        hit_anything = hit_anything_prev;
-                        continue;
-                    }
-                    hit_anything = hit_anything_prev;
+                        Modification::ConstantMediumPhase1 { original_rec, original_t, medium, hit_anything_prev } => {
+                            if !hit_anything {
+                                hit_anything = hit_anything_prev;
+                                *rec = original_rec.clone();
+                                tmin = original_t.min;
+                                tmax = original_t.max;
+                                continue;
+                            }
 
-                    if rec_1.t < tmin { rec_1.t = tmin }
-                    if rec_2.t > tmax { rec_2.t = tmax }
+                            modification_stack.push(Modification::ConstantMediumPhase2 {
+                                original_rec, original_t, rec_1: rec.clone(), medium,
+                                hit_anything_prev });
+                            hittable_stack.push(Switch::Modification);
+                            hittable_stack.push(Switch::Hittable(medium.boundary));
 
-                    if rec_1.t >= rec_2.t { continue }
-                    rec_1.t = rec_1.t.max(0.0);
+                            tmin = 0.0001 + rec.t;
+                            tmax = Interval::UNIVERSE.max;
+                            *rec = HitRecord::default();
+                            hit_anything = false;
+                            continue;
+                        },
 
-                    let ray_len = ray.direction.length();
-                    let distance_inside_bounds = (rec_2.t - rec_1.t) * ray_len;
-                    let hit_distance = medium.neg_inv_density * seed.next_f32().log(E as f32); 
 
-                    if hit_distance > distance_inside_bounds { continue }
+                        Modification::ConstantMediumPhase2 { original_rec, original_t, mut rec_1, medium, hit_anything_prev } => {
+                            let mut rec_2 = core::mem::replace(rec, original_rec);
+                            tmin = original_t.min;
+                            tmax = original_t.max;
+                            if !hit_anything {
+                                hit_anything = hit_anything_prev;
+                                continue;
+                            }
+                            hit_anything = hit_anything_prev;
 
-                    rec.t = rec_1.t + hit_distance/ray_len;
-                    tmax = rec.t;
-                    rec.point = ray.at(rec.t);
+                            if rec_1.t < tmin { rec_1.t = tmin }
+                            if rec_2.t > tmax { rec_2.t = tmax }
 
-                    rec.normal = Vec3::new(1.0, 0.0, 0.0); // arbitrary
-                    rec.front_face = true; // also arbitrary
-                    rec.material = medium.phase_function;
-                    hit_anything = true;
+                            if rec_1.t >= rec_2.t { continue }
+                            rec_1.t = rec_1.t.max(0.0);
 
-                    continue;
+                            let ray_len = ray.direction.length();
+                            let distance_inside_bounds = (rec_2.t - rec_1.t) * ray_len;
+                            let hit_distance = medium.neg_inv_density * seed.next_f32().log(E as f32); 
+
+                            if hit_distance > distance_inside_bounds { continue }
+
+                            rec.t = rec_1.t + hit_distance/ray_len;
+                            tmax = rec.t;
+                            rec.point = ray.at(rec.t);
+
+                            rec.normal = Vec3::new(1.0, 0.0, 0.0); // arbitrary
+                            rec.front_face = true; // also arbitrary
+                            rec.material = medium.phase_function;
+                            hit_anything = true;
+
+                            continue;
+                        }
+                    };
                 },
 
 
@@ -170,25 +184,21 @@ impl Ray {
 
                     let [(left_t, hit_left), (right_t, hit_right)] = aabbs.hit(&ray, t);
 
-                    if let Some(right) = right {
-                        match (hit_left, hit_right) {
-                            (true, true) => {
-                                if left_t.max <= right_t.max {
-                                    hittable_stack.push(Switch::Hittable(right));
-                                    hittable_stack.push(Switch::Hittable(left));
-                                } else {
-                                    hittable_stack.push(Switch::Hittable(left));
-                                    hittable_stack.push(Switch::Hittable(right));
-                                }
+                    match (hit_left, hit_right) {
+                        (true, true) => {
+                            if left_t.max <= right_t.max {
+                                hittable_stack.push(Switch::Hittable(right));
+                                hittable_stack.push(Switch::Hittable(left));
+                            } else {
+                                hittable_stack.push(Switch::Hittable(left));
+                                hittable_stack.push(Switch::Hittable(right));
                             }
-
-                            (true, false) => hittable_stack.push(Switch::Hittable(left)),
-                            (false, true) => hittable_stack.push(Switch::Hittable(right)),
-                            (false, false) => (),
                         }
-                    } else if hit_left {
-                        hittable_stack.push(Switch::Hittable(left));
-                    };
+
+                        (true, false) => hittable_stack.push(Switch::Hittable(left)),
+                        (false, true) => hittable_stack.push(Switch::Hittable(right)),
+                        (false, false) => (),
+                    }
 
                     continue;
                 },
@@ -196,7 +206,8 @@ impl Ray {
 
                 HittableKind::Move { obj, offset } => {
                     ray.origin = ray.origin - *offset;
-                    hittable_stack.push(Switch::RayMove((*offset, hit_anything)));
+                    modification_stack.push(Modification::RayMove((*offset, hit_anything)));
+                    hittable_stack.push(Switch::Modification);
                     hittable_stack.push(Switch::Hittable(obj));
 
                     hit_anything = false;
@@ -222,11 +233,12 @@ impl Ray {
                     ray.origin = origin;
                     ray.direction = direction;
 
-                    hittable_stack.push(Switch::RayRotateY {
+                    modification_stack.push(Modification::RayRotateY {
                         original_ray, hit_anything_prev: hit_anything,
                         sin: *sin, cos: *cos,
                     });
 
+                    hittable_stack.push(Switch::Modification);
                     hittable_stack.push(Switch::Hittable(obj));
 
                     continue;
@@ -234,19 +246,15 @@ impl Ray {
 
                 },
 
-                HittableKind::List(hittables) => {
-                    for h in hittables.iter() { hittable_stack.push(Switch::Hittable(h)) };
-                    continue
-                },
-
 
                 HittableKind::ConstantMedium(constant_medium) => {
-                    hittable_stack.push(Switch::ConstantMediumPhase1 {
+                    modification_stack.push(Modification::ConstantMediumPhase1 {
                         original_rec: rec.clone(),
                         original_t: t,
                         medium: constant_medium,
                         hit_anything_prev: hit_anything,
                     });
+                    hittable_stack.push(Switch::Modification);
                     hittable_stack.push(Switch::Hittable(constant_medium.boundary));
 
                     *rec = HitRecord::default();
